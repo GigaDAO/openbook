@@ -26,3 +26,19 @@ This job has two primary components:
 Note that for component (1), you can just copy the structures directly from the contract source code, eg: https://github.com/openbook-dex/program/blob/master/dex/src/critbit.rs.
 
 For component (2), you can get the data structs directly from the source, and the key metas from the instructions.js… this is just one approach. You can use whatever approach is more efficient for you. 
+
+### Requirements
+- `rustc -V == 1.74.1`
+
+## A note to Bounty Hunters
+
+This repo has two functions:
+1) It will be used in our production code.
+2) It will be used to determine which devs have enough skill to work with GigaDAO.
+
+If you want to prove that you are a skilled Rust programmer, and thus receive paid bounty assignments, this is your 
+opportunity. ***You do not have to implement the whole SDK.*** If you submit a PR for partially complete SDK, but it proves
+your skill level, then I can assign you paid bounties. The minimum requirement all PR's is:
+1) Must have working unit tests.
+2) Must be clean and readable.
+
