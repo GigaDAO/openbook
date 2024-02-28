@@ -6,3 +6,19 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+byteorder = "1.5.0"
+num-bigint = "0.4.4"
+thiserror = "1.0.57"
+openbook_dex = { version = "0.5.6" , features = ["test", "client"]}
+solana-rpc-client = "1.18.3"
+anyhow = "1.0.80"
+solana-program = "1.18.3"
+solana-sdk = "1.18.3"
+dotenv = "0.15.0"
+serde_json = "1.0.114"
+rand = "0.8.5"
+solana-rpc-client-api = "1.18.3"
+anchor-spl = "0.29.0"
+solana-client = "1.18.3"
+serum_dex = "0.5.4"
+pyth-sdk-solana = "0.10.0"
