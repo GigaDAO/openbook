@@ -1,3 +1,8 @@
+//! This module contains structs and functions related to the openbook market.
+
+use crate::orders::OpenOrders;
+use crate::orders::OpenOrdersCacheEntry;
+use crate::utils::{get_unix_secs, u64_slice_to_bytes};
 use openbook_dex::critbit::Slab;
 use openbook_dex::instruction::SelfTradeBehavior;
 use openbook_dex::matching::{OrderType, Side};
@@ -9,13 +14,12 @@ use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 use solana_rpc_client::rpc_client::RpcClient;
 use solana_rpc_client_api::config::RpcSendTransactionConfig;
 use solana_sdk::account::Account;
-use solana_sdk::bs58;
 use solana_sdk::signature::Signature;
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk::transaction::Transaction;
 use std::cell::RefMut;
+use std::collections::HashMap;
 use std::fmt;
-use std::fs;
 use std::num::NonZeroU64;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -45,6 +49,9 @@ pub struct Market {
 
     /// The maximum bid price in the market.
     pub max_bid: f64,
+
+    /// The account flags associated with the market.
+    pub account_flags: u64,
 
     /// The lot size for the quote currency (pc) in the market.
     pub pc_lot_size: u64,
@@ -78,6 +85,7 @@ pub struct Market {
 
     /// The public key of the request queue associated with the market.
     pub request_queue: Pubkey,
+    open_orders_accounts_cache: HashMap<Pubkey, OpenOrdersCacheEntry>,
 }
 
 /// Wrapper type for RpcClient to enable Debug trait implementation.
@@ -108,11 +116,9 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// use solana_program::pubkey::Pubkey;
-    /// use solana_sdk::signature::Keypair;
-    /// use solana_rpc_client::rpc_client::RpcClient;
-    /// use openbook_v1_sdk::market::Market;
-    /// use openbook_v1_sdk::market::read_keypair;
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
     ///
     /// dotenv::dotenv().ok();
     /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
@@ -152,6 +158,17 @@ impl Market {
         let event_queue = Default::default();
         let request_queue = Default::default();
 
+        let decoded = Default::default();
+        let open_orders = OpenOrders::new(market_address, decoded, keypair.pubkey());
+        let mut open_orders_accounts_cache = HashMap::new();
+
+        let open_orders_cache_entry = OpenOrdersCacheEntry {
+            accounts: vec![open_orders],
+            ts: 123456789,
+        };
+
+        open_orders_accounts_cache.insert(keypair.pubkey(), open_orders_cache_entry);
+
         let mut market = Self {
             rpc_client: DebuggableRpcClient(rpc_client),
             program_id,
@@ -172,8 +189,9 @@ impl Market {
             orders_key,
             event_queue,
             request_queue,
+            account_flags: 0,
+            open_orders_accounts_cache,
         };
-
         market.load().unwrap();
 
         market
@@ -197,13 +215,6 @@ impl Market {
     ///
     /// This function may return an error if there is an issue with fetching accounts
     /// or processing the market information.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
-    /// market.load().expect("Failed to load market information");
-    /// ```
     pub fn load(&mut self) -> anyhow::Result<()> {
         let mut account = self.rpc_client.0.get_account(&self.market_address)?;
         let program_id_binding = self.program_id;
@@ -216,16 +227,71 @@ impl Market {
             false,
         );
 
-        let market_state = self.load_market_state(&account_info)?;
-        let (bids_address, asks_address, max_bid) = self.load_bids_info(&market_state)?;
-
-        drop(market_state);
-
-        self.bids_address = bids_address.clone();
-        self.asks_address = asks_address.clone();
-        self.max_bid = max_bid.clone();
+        let _ = self.load_market_state_bids_info(&account_info)?;
 
         Ok(())
+    }
+
+    /// Loads the market state and bids information from the provided account information.
+    ///
+    /// # Arguments
+    ///
+    /// * `&mut self` - A mutable reference to the `Market` struct.
+    /// * `binding` - A reference to the account information used to load the market state.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a mutable reference to the loaded `MarketState` if successful,
+    /// or an error if loading the market state fails.
+    ///
+    /// # Errors
+    ///
+    /// This function may return an error if there is an issue with loading the market state.
+    pub fn load_market_state_bids_info<'a>(
+        &'a mut self,
+        binding: &'a AccountInfo,
+    ) -> anyhow::Result<RefMut<MarketState>> {
+        let market_state = MarketState::load(binding, &self.program_id, false)?;
+
+        {
+            let coin_vault_array: [u8; 32] = u64_slice_to_bytes(market_state.coin_vault);
+            let pc_vault_array: [u8; 32] = u64_slice_to_bytes(market_state.pc_vault);
+            let request_queue_array: [u8; 32] = u64_slice_to_bytes(market_state.req_q);
+            let event_queue_array: [u8; 32] = u64_slice_to_bytes(market_state.event_q);
+
+            let coin_vault_temp = Pubkey::new_from_array(coin_vault_array);
+            let pc_vault_temp = Pubkey::new_from_array(pc_vault_array);
+            let request_queue_temp = Pubkey::new_from_array(request_queue_array);
+            let event_queue_temp = Pubkey::new_from_array(event_queue_array);
+
+            self.coin_vault = coin_vault_temp;
+            self.pc_vault = pc_vault_temp;
+            self.request_queue = request_queue_temp;
+            self.account_flags = market_state.account_flags;
+            self.coin_lot_size = market_state.coin_lot_size;
+            self.pc_lot_size = market_state.pc_lot_size;
+            self.coin_lot_size = market_state.coin_lot_size;
+            self.event_queue = event_queue_temp;
+        }
+
+        let (bids_address, asks_address) = self.get_bids_asks_addresses(&market_state);
+
+        let mut bids_account = self.rpc_client.0.get_account(&bids_address)?;
+        let bids_info = self.create_account_info_from_account(
+            &mut bids_account,
+            &bids_address,
+            &self.program_id,
+            false,
+            false,
+        );
+        let mut bids = market_state.load_bids_mut(&bids_info)?;
+        let max_bid = self.process_bids(&mut bids)?;
+
+        self.bids_address = bids_address;
+        self.asks_address = asks_address;
+        self.max_bid = max_bid;
+
+        Ok(market_state)
     }
 
     /// Loads information about bids, asks, and the maximum bid price from the market state.
@@ -248,32 +314,27 @@ impl Market {
     ///
     /// This function may return an error if there is an issue with fetching accounts
     /// or processing the bids information.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
-    /// let market_state = market.load_market_state(&account_info).expect("Failed to load market state");
-    /// let (bids_address, asks_address, max_bid) = market.load_bids_info(&market_state)
-    ///     .expect("Failed to load bids information");
-    /// ```
     pub fn load_bids_info(
-        &self,
+        &mut self,
         market_state: &RefMut<MarketState>,
     ) -> anyhow::Result<(Pubkey, Pubkey, f64)> {
-        let (bids_address, asks_address) = self.get_bids_asks_addresses(&market_state);
+        let (bids_address, asks_address) = self.get_bids_asks_addresses(market_state);
 
         let mut bids_account = self.rpc_client.0.get_account(&bids_address)?;
-        let mut bids_info = self.create_account_info_from_account(
+        let bids_info = self.create_account_info_from_account(
             &mut bids_account,
             &bids_address,
             &self.program_id,
             false,
             false,
         );
-        let mut bids = market_state.load_bids_mut(&mut bids_info)?;
+        let mut bids = market_state.load_bids_mut(&bids_info)?;
 
         let max_bid = self.process_bids(&mut bids)?;
+
+        self.bids_address = bids_address;
+        self.asks_address = asks_address;
+        self.max_bid = max_bid;
 
         Ok((bids_address, asks_address, max_bid))
     }
@@ -299,8 +360,30 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
-    /// let max_bid = market.process_bids(&mut bids).expect("Failed to process bids");
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
+    /// // let max_bid = market.process_bids(&mut bids).expect("Failed to process bids");
     /// ```
     pub fn process_bids(&self, bids: &mut RefMut<Slab>) -> anyhow::Result<f64> {
         let max_bid;
@@ -335,75 +418,41 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let (bids_address, asks_address) = market.get_bids_asks_addresses(&market_state);
     /// ```
     pub fn get_bids_asks_addresses(&self, market_state: &MarketState) -> (Pubkey, Pubkey) {
         let bids = market_state.bids;
         let asks = market_state.asks;
-        let bids_bytes = self.u64_slice_to_bytes(&bids);
-        let asks_bytes = self.u64_slice_to_bytes(&asks);
+        let bids_bytes = u64_slice_to_bytes(bids);
+        let asks_bytes = u64_slice_to_bytes(asks);
 
         let bids_address = Pubkey::new_from_array(bids_bytes);
         let asks_address = Pubkey::new_from_array(asks_bytes);
 
         (bids_address, asks_address)
-    }
-
-    /// Converts a slice of `u64` values into a fixed-size byte array.
-    ///
-    /// # Arguments
-    ///
-    /// * `&self` - A reference to the `Market` struct.
-    /// * `slice` - A reference to a slice of `u64` values to be converted.
-    ///
-    /// # Returns
-    ///
-    /// A fixed-size array of bytes containing the serialized `u64` values.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
-    /// let slice = [1, 2, 3, 4];
-    /// let bytes_array = market.u64_slice_to_bytes(&slice);
-    /// ```
-    pub fn u64_slice_to_bytes(&self, slice: &[u64]) -> [u8; 32] {
-        let mut bytes_array: [u8; 32] = [0; 32];
-        for i in 0..4 {
-            bytes_array[i * 8..i * 8 + 8].copy_from_slice(&slice[i].to_le_bytes());
-        }
-        bytes_array
-    }
-
-    /// Loads the market state from the provided account information.
-    ///
-    /// # Arguments
-    ///
-    /// * `&self` - A reference to the `Market` struct.
-    /// * `binding` - A reference to the account information used to load the market state.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a mutable reference to the loaded `MarketState` if successful,
-    /// or an error if loading the market state fails.
-    ///
-    /// # Errors
-    ///
-    /// This function may return an error if there is an issue with loading the market state.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
-    /// let market_state = market.load_market_state(&account_info).expect("Failed to load market state");
-    /// ```
-    pub fn load_market_state<'a>(
-        &'a self,
-        binding: &'a AccountInfo,
-    ) -> anyhow::Result<RefMut<MarketState>> {
-        let market_state = MarketState::load(binding, &self.program_id, false)?;
-        Ok(market_state)
     }
 
     /// Creates an `AccountInfo` instance from an `Account`.
@@ -424,7 +473,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let account_info = market.create_account_info_from_account(&mut account, &key, &my_program_id, true, true);
     /// ```
     pub fn create_account_info_from_account<'a>(
@@ -441,7 +512,7 @@ impl Market {
             is_writable,
             &mut account.lamports,
             &mut account.data,
-            &my_program_id,
+            my_program_id,
             account.executable,
             account.rent_epoch,
         )
@@ -466,7 +537,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let max_bid = 1;
     /// let r = market.place_limit_bid(max_bid).expect("Failed to place limit bid");
     /// ```
@@ -503,8 +596,7 @@ impl Market {
         )
         .unwrap();
 
-        let mut instructions = Vec::new();
-        instructions.push(place_order_ix);
+        let instructions = vec![place_order_ix];
 
         let recent_hash = self.rpc_client.0.get_latest_blockhash()?;
         let txn = Transaction::new_signed_with_payer(
@@ -516,9 +608,7 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        let r = self.rpc_client.0.send_transaction_with_config(&txn, config);
-
-        r
+        self.rpc_client.0.send_transaction_with_config(&txn, config)
     }
 
     /// Cancels an existing order in the market.
@@ -540,7 +630,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let order_id_to_cancel = 2;
     /// let c = market.cancel_order(order_id_to_cancel).expect("Failed to cancel order");
     /// ```
@@ -560,8 +672,7 @@ impl Market {
         )
         .unwrap();
 
-        let mut instructions = Vec::new();
-        instructions.push(ix);
+        let instructions = vec![ix];
 
         let recent_hash = self.rpc_client.0.get_latest_blockhash()?;
         let txn = Transaction::new_signed_with_payer(
@@ -573,8 +684,7 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        let r = self.rpc_client.0.send_transaction_with_config(&txn, config);
-        r
+        self.rpc_client.0.send_transaction_with_config(&txn, config)
     }
 
     /// Settles the balance for a user in the market.
@@ -595,7 +705,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let s = market.settle_balance().expect("Failed to settle balance");
     /// ```
     pub fn settle_balance(&self) -> anyhow::Result<Signature, ClientError> {
@@ -614,8 +746,7 @@ impl Market {
         )
         .unwrap();
 
-        let mut instructions = Vec::new();
-        instructions.push(ix);
+        let instructions = vec![ix];
 
         let recent_hash = self.rpc_client.0.get_latest_blockhash()?;
         let txn = Transaction::new_signed_with_payer(
@@ -627,9 +758,7 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        let r = self.rpc_client.0.send_transaction_with_config(&txn, config);
-
-        r
+        self.rpc_client.0.send_transaction_with_config(&txn, config)
     }
 
     /// Creates a new transaction to match orders in the market.
@@ -649,6 +778,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let tx = market.make_match_orders_transaction(100)?;
     /// ```
     pub fn make_match_orders_transaction(
@@ -657,7 +809,7 @@ impl Market {
     ) -> anyhow::Result<Signature, ClientError> {
         let tx = Transaction::new_with_payer(&[], Some(&self.keypair.pubkey()));
 
-        let match_orders_ix = openbook_dex::instruction::match_orders(
+        let _match_orders_ix = openbook_dex::instruction::match_orders(
             &self.program_id,
             &self.market_address,
             &self.request_queue,
@@ -670,14 +822,9 @@ impl Market {
         )
         .unwrap();
 
-        let mut instructions = Vec::new();
-        instructions.push(match_orders_ix);
-
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        let r = self.rpc_client.0.send_transaction_with_config(&tx, config);
-
-        r
+        self.rpc_client.0.send_transaction_with_config(&tx, config)
     }
 
     /// Loads the bids from the market.
@@ -696,7 +843,7 @@ impl Market {
     /// let bids = market.load_bids()?;
     /// ```
     pub fn load_bids(&self) -> Result<Vec<u8>, ProgramError> {
-        Ok(self.load_orders(self.bids_address)?)
+        self.load_orders(self.bids_address)
     }
 
     /// Loads the asks from the market.
@@ -712,10 +859,33 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let asks = market.load_asks()?;
     /// ```
     pub fn load_asks(&self) -> Result<Vec<u8>, ProgramError> {
-        Ok(self.load_orders(self.asks_address)?)
+        self.load_orders(self.asks_address)
     }
 
     /// Loads orders from the specified address.
@@ -735,6 +905,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let orders = market.load_orders(bids_address)?;
     /// ```
     pub fn load_orders(&self, address: Pubkey) -> Result<Vec<u8>, ProgramError> {
@@ -760,7 +953,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
-    /// // Assuming `market` is an initialized instance of the `Market` struct
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
+    ///
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     /// let limit = 10;
     /// let result = market.make_consume_events_instruction(open_orders_accounts, limit);
@@ -784,14 +999,9 @@ impl Market {
         let tx =
             Transaction::new_with_payer(&[consume_events_ix.clone()], Some(&self.keypair.pubkey()));
 
-        let mut instructions = Vec::new();
-        instructions.push(consume_events_ix);
-
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        let result = self.rpc_client.0.send_transaction_with_config(&tx, config);
-
-        result
+        self.rpc_client.0.send_transaction_with_config(&tx, config)
     }
 
     /// Consumes permissioned events from the market for specified open orders accounts.
@@ -809,8 +1019,29 @@ impl Market {
     /// # Examples
     ///
     /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::market::read_keypair;
     ///
-    /// let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
+    /// dotenv::dotenv().ok();
+    /// let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    /// let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    /// let market_address = std::env::var("SOL_USDC_MARKET_ID")
+    ///     .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
+    ///     .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
+    ///     .parse()
+    ///     .unwrap();
+    /// let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
+    /// let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
+    /// let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
+    ///
+    /// let rpc_client = RpcClient::new(rpc_url);
+    /// let keypair = read_keypair(&key_path);
+    ///
+    /// let market = Market::new(rpc_client, program_id, market_address, keypair);
     /// let limit = 10;
     /// let result = market.make_consume_events_permissioned_instruction(open_orders_accounts, limit);
     /// ```
@@ -835,65 +1066,69 @@ impl Market {
             Some(&self.keypair.pubkey()),
         );
 
-        let mut instructions = Vec::new();
-        instructions.push(consume_events_permissioned_ix);
-
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        let result = self.rpc_client.0.send_transaction_with_config(&tx, config);
-
-        result
+        self.rpc_client.0.send_transaction_with_config(&tx, config)
     }
-}
 
-/// Reads a keypair from a file.
-///
-/// # Arguments
-///
-/// * `path` - The file path containing the keypair information.
-///
-/// # Returns
-///
-/// A `Keypair` instance created from the keypair information in the file.
-///
-/// # Examples
-///
-/// ```rust
-/// use openbook_v1_sdk::market::read_keypair;
-///
-/// let path = String::from("/path/to/keypair_file.json");
-/// let keypair = read_keypair(&path);
-/// ```
-pub fn read_keypair(path: &String) -> Keypair {
-    let secret_string: String = fs::read_to_string(path).expect("Can't find key file");
-    let secret_bytes: Vec<u8> = match serde_json::from_str(&secret_string) {
-        Ok(bytes) => bytes,
-        Err(_) => match bs58::decode(&secret_string.trim()).into_vec() {
-            Ok(bytes) => bytes,
-            Err(_) => panic!("failed to load secret key from file"),
-        },
-    };
-    let keypair =
-        Keypair::from_bytes(&secret_bytes).expect("failed to generate keypair from secret bytes");
-    keypair
-}
+    pub fn load_orders_for_owner(
+        &mut self,
+        cache_duration_ms: u64,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let bids = self.load_bids()?;
+        let asks = self.load_asks()?;
+        let open_orders_accounts =
+            self.find_open_orders_accounts_for_owner(&self.keypair.pubkey(), cache_duration_ms)?;
 
-/// Gets the current UNIX timestamp in seconds.
-///
-/// # Returns
-///
-/// The current UNIX timestamp in seconds.
-///
-/// # Examples
-///
-/// ```rust
-/// use openbook_v1_sdk::market::get_unix_secs;
-///
-/// let timestamp = get_unix_secs();
-/// ```
-pub fn get_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+        Ok(self.filter_for_open_orders(bids, asks, open_orders_accounts))
+    }
+
+    pub fn filter_for_open_orders(
+        &self,
+        bids: Vec<u8>,
+        asks: Vec<u8>,
+        open_orders_accounts: Vec<OpenOrders>,
+    ) -> Vec<u8> {
+        // Implementation of filter_for_open_orders function
+        let all_orders = bids.into_iter().chain(asks);
+        let orders = all_orders
+            .filter(|_order| {
+                open_orders_accounts.iter().any(|_oo| true) // todo fix order.address == oo.address
+            })
+            .collect();
+        orders
+    }
+
+    pub fn find_open_orders_accounts_for_owner(
+        &mut self,
+        owner_address: &Pubkey,
+        cache_duration_ms: u64,
+    ) -> Result<Vec<OpenOrders>, Box<dyn std::error::Error>> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis();
+        if let Some(cache_entry) = self.open_orders_accounts_cache.get(owner_address) {
+            if now - cache_entry.ts < cache_duration_ms.into() {
+                return Ok(cache_entry.accounts.clone());
+            }
+        }
+
+        let open_orders_accounts_for_owner = OpenOrders::find_for_market_and_owner(
+            &self.rpc_client.0,
+            self.keypair.pubkey(),
+            *owner_address,
+            self.program_id,
+            false,
+        )?;
+        self.open_orders_accounts_cache.insert(
+            *owner_address,
+            OpenOrdersCacheEntry {
+                accounts: open_orders_accounts_for_owner.clone(),
+                ts: now,
+            },
+        );
+
+        Ok(open_orders_accounts_for_owner)
+    }
 }

@@ -1,3 +1,5 @@
+//! This module contains utility functions related openbook token and market info.
+
 use solana_sdk::pubkey::Pubkey;
 
 /// Represents the layout versions associated with Solana programs.
@@ -9,7 +11,7 @@ use solana_sdk::pubkey::Pubkey;
 ///
 /// ```
 /// use solana_sdk::pubkey::Pubkey;
-/// use openbook_v1_sdk::tokens_and_markets::get_layout_version;
+/// use openbook::tokens_and_markets::get_layout_version;
 ///
 /// // Access the layout version for a specific program ID
 /// let program_id = Pubkey::new_unique();
@@ -38,7 +40,7 @@ pub static PROGRAM_LAYOUT_VERSIONS: [(&str, u8); 4] = [
 ///
 /// ```rust
 /// use solana_sdk::pubkey::Pubkey;
-/// use openbook_v1_sdk::tokens_and_markets::get_layout_version;
+/// use openbook::tokens_and_markets::get_layout_version;
 ///
 /// let program_id = Pubkey::new_unique();
 /// let version = get_layout_version(&program_id);

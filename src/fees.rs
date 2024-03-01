@@ -1,3 +1,5 @@
+//! This module contains functions related to the openbook market fees.
+
 use crate::tokens_and_markets::get_layout_version;
 use solana_sdk::pubkey::Pubkey;
 
@@ -15,7 +17,7 @@ use solana_sdk::pubkey::Pubkey;
 ///
 /// ```rust
 /// use solana_sdk::pubkey::Pubkey;
-/// use openbook_v1_sdk::fees::supports_srm_fee_discounts;
+/// use openbook::fees::supports_srm_fee_discounts;
 ///
 /// let program_id = Pubkey::new_unique();
 /// let is_supported = supports_srm_fee_discounts(&program_id);
@@ -39,7 +41,7 @@ pub fn supports_srm_fee_discounts(program_id: &Pubkey) -> bool {
 /// # Examples
 ///
 /// ```rust
-/// use openbook_v1_sdk::fees::get_fee_rates;
+/// use openbook::fees::get_fee_rates;
 ///
 /// let fee_tier = 3;
 /// let (taker_rate, maker_rate) = get_fee_rates(fee_tier);
@@ -72,7 +74,7 @@ pub fn get_fee_rates(fee_tier: u32) -> (f64, f64) {
 /// # Examples
 ///
 /// ```rust
-/// use openbook_v1_sdk::fees::get_fee_tier;
+/// use openbook::fees::get_fee_tier;
 ///
 /// let msrm_balance = 1.5;
 /// let srm_balance = 0.0;
