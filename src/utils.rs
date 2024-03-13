@@ -1,16 +1,14 @@
 //! This module contains utility functions related openbook.
 
-use crate::{account::Account, bs58, keypair::Keypair, pubkey::Pubkey, rpc_client::RpcClient};
+use crate::{account::Account, bs58, keypair::Keypair, rpc_client::RpcClient};
+use log::debug;
 use solana_account_decoder::UiAccountEncoding;
-use solana_account_decoder::UiDataSliceConfig;
-use solana_client::rpc_config::RpcAccountInfoConfig;
-use solana_client::rpc_config::RpcProgramAccountsConfig;
-use solana_client::rpc_filter::RpcFilterType;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_client::{
+    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
+    rpc_filter::RpcFilterType,
+};
 use solana_sdk::sysvar::slot_history::ProgramError;
-use std::fs;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::{fs, time::SystemTime, time::UNIX_EPOCH};
 
 /// Converts a slice of `u64` values into a fixed-size byte array.
 ///
@@ -29,7 +27,7 @@ use std::time::UNIX_EPOCH;
 /// use openbook::utils::u64_slice_to_bytes;
 ///
 /// let slice = [1, 2, 3, 4];
-/// let bytes_array = u64_slice_to_bytes(&slice);
+/// let bytes_array = u64_slice_to_bytes(slice);
 /// ```
 pub fn u64_slice_to_bytes(array: [u64; 4]) -> [u8; 32] {
     let mut result = [0u8; 32];
@@ -52,10 +50,10 @@ pub fn u64_slice_to_bytes(array: [u64; 4]) -> [u8; 32] {
 /// # Examples
 ///
 /// ```rust
-/// use openbook::market::read_keypair;
+/// use openbook::utils::read_keypair;
 ///
 /// let path = String::from("/path/to/keypair_file.json");
-/// let keypair = read_keypair(&path);
+/// // let keypair = read_keypair(&path);
 /// ```
 pub fn read_keypair(path: &String) -> Keypair {
     let secret_string: String = fs::read_to_string(path).expect("Can't find key file");
@@ -78,7 +76,7 @@ pub fn read_keypair(path: &String) -> Keypair {
 /// # Examples
 ///
 /// ```rust
-/// use openbook::market::get_unix_secs;
+/// use openbook::utils::get_unix_secs;
 ///
 /// let timestamp = get_unix_secs();
 /// ```
@@ -104,48 +102,67 @@ pub fn get_unix_secs() -> u64 {
 /// # Examples
 ///
 /// ```rust
-/// use openbook::orders::get_filtered_program_accounts;
+/// use openbook::utils::get_filtered_program_accounts;
+/// use openbook::rpc_filter::RpcFilterType;
+/// use openbook::rpc_filter::MemcmpEncoding;
+/// use openbook::bs58;
+/// use openbook::rpc_filter::Memcmp;
+/// use openbook::rpc_filter::MemcmpEncodedBytes;
 /// use openbook::{pubkey::Pubkey, account::Account, rpc_client::RpcClient};
+/// use std::str::FromStr;
 ///
-/// let rpc_url = String::default();
-/// let connection = RpcClient::new(rpc_url);
-/// let program_id = Pubkey::default();
-/// let filters = vec![];
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set");
+///     let connection = RpcClient::new(rpc_url);
+///     let market_address: Pubkey = std::env::var("MARKET_ID")
+///         .expect("MARKET_ID is not set")
+///         .parse()
+///         .unwrap();
+///     let filters = vec![
+///         RpcFilterType::Memcmp(Memcmp {
+///             offset: 32,
+///             bytes: MemcmpEncodedBytes::Base58(bs58::encode(market_address).into_string()),
+///             encoding: Some(MemcmpEncoding::Binary),
+///         }),
+///         RpcFilterType::DataSize(165),
+///     ];
 ///
-/// match get_filtered_program_accounts(&connection, &program_id, filters) {
-///     Ok(accounts) => println!("Filtered accounts: {:?}", accounts),
-///     Err(err) => eprintln!("Error getting filtered accounts: {:?}", err),
+///     match get_filtered_program_accounts(&connection, filters).await {
+///         Ok(accounts) => println!("Filtered accounts: {:?}", accounts),
+///         Err(err) => eprintln!("Error getting filtered accounts: {:?}", err),
+///     }
+///     Ok(())
 /// }
 /// ```
-pub fn get_filtered_program_accounts(
+pub async fn get_filtered_program_accounts(
     connection: &RpcClient,
-    program_id: &Pubkey,
     filters: Vec<RpcFilterType>,
 ) -> Result<Vec<Account>, ProgramError> {
-    let _config = RpcProgramAccountsConfig {
+    let config = RpcProgramAccountsConfig {
         filters: Some(filters),
         account_config: RpcAccountInfoConfig {
             encoding: Some(UiAccountEncoding::Base64),
-            data_slice: Some(UiDataSliceConfig {
-                offset: 0,
-                length: 5,
-            }),
-            commitment: Some(CommitmentConfig::processed()),
-            min_context_slot: Some(1234),
+            commitment: Some(connection.commitment()),
+            ..RpcAccountInfoConfig::default()
         },
         with_context: Some(false),
     };
-    // TODO: Fix 410 resource is no longer available?
-    // let resp = connection
-    //     .get_program_accounts_with_config(&program_id, config)
-    //     .unwrap();
-    let resp = connection.get_account(program_id).unwrap();
+    // Error 410: Resource No Longer Available
+    // The occurrence of this error is attributed to the high cost of the
+    // `get_program_accounts_with_config` call on the mainnet-beta network. As a result,
+    // consider utilizing the Helius network as an alternative to mitigate this issue.
+    let accounts = connection
+        .get_program_accounts_with_config(&anchor_spl::token::ID, config)
+        .await
+        .unwrap();
 
-    // let mut result = Vec::new();
+    let mut result = Vec::new();
 
-    // for (_, account) in resp.into_iter() {
-    //     result.push(account);
-    // }
+    for (i, account) in accounts.iter().enumerate() {
+        debug!("\n[*] ATA {:?}:  {:?}\n", i, account);
+        result.push(account.1.clone());
+    }
 
-    Ok(vec![resp])
+    Ok(result)
 }
