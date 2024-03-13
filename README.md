@@ -41,12 +41,12 @@ Before using the `openbook` crate or CLI, make sure to set the following environ
 ```bash
 export RPC_URL=https://api.mainnet-beta.solana.com
 export KEY_PATH=<path_to_your_key_file>
-export SOL_USDC_MARKET_ID=8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6
+export MARKET_ID=8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6
 export OPENBOOK_V1_PROGRAM_ID=srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX
-export USDC_ATA=<your_usdc_ata_value>
-export WSOL_ATA=<your_wsol_ata_value>
-export OOS_KEY=<your_oos_key_value>
 ```
+
+> [!NOTE]
+> Certain RPC methods, like `getProgramAccounts`, are no longer available on `api.mainnet-beta.solana.com`. We recommend utilizing [helius.dev](https://www.helius.dev) as an alternative.
 
 ## ⌨ Usage as CLI
 
@@ -59,13 +59,7 @@ openbook place --bid 100
 ### Cancel an order:
 
 ```sh
-openbook cancel --order 42
-```
-
-### Settle balances (WIP):
-
-```sh
-openbook settle --future-option 1
+openbook cancel --bid 42
 ```
 
 ### Make match orders transaction:
@@ -92,73 +86,64 @@ openbook consume-permissioned --limit 15
 openbook load --num 20
 ```
 
-### Find open orders accounts for owner (WIP):
-
-```sh
-openbook find --future-option  1
-```
-
 ## 💻 Usage as Dependency
 
 ```toml
 [dependencies]
-openbook = "0.0.1"
+openbook = "0.0.2"
 ```
 
 ```rust
-use openbook::utils::read_keypair;
+use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
 use openbook::market::Market;
-use openbook::pubkey::Pubkey;
-use openbook::rpc_client::RpcClient;
-use std::error::Error;
+use openbook::utils::read_keypair;
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    let market_address = std::env::var("SOL_USDC_MARKET_ID")
-        .expect("SOL_USDC_MARKET_ID is not set in .env file")
+    let market_address = std::env::var("MARKET_ID")
+        .expect("MARKET_ID is not set in .env file")
         .parse()
         .unwrap();
     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
         .parse()
         .unwrap();
-    let _usdc_ata_str = std::env::var("USDC_ATA").expect("USDC_ATA is not set in .env file");
-    let _wsol_ata_str = std::env::var("WSOL_ATA").expect("WSOL_ATA is not set in .env file");
-    let _oos_key_str = std::env::var("OOS_KEY").expect("OOS_KEY is not set in .env file");
-
+    
     let rpc_client = RpcClient::new(rpc_url);
+    
     let keypair = read_keypair(&key_path);
-
-    let mut market = Market::new(rpc_client, program_id, market_address, keypair);
-    println!("Market Info: {:?}", market);
+    
+    let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
+    
+    println!("Initialized Market: {:?}", market);
 
     let max_bid = 1;
-    let r = market.place_limit_bid(max_bid)?;
+    let r = market.place_limit_bid(max_bid).await?;
     println!("Place Order Results: {:?}", r);
 
     let order_id_to_cancel = 2;
-    let c = market.cancel_order(order_id_to_cancel)?;
+    let c = market.cancel_order(order_id_to_cancel).await?;
     println!("Cancel Order Results: {:?}", c);
 
-    let s = market.settle_balance()?;
+    let s = market.settle_balance().await?;
     println!("Settle Balance Results: {:?}", s);
 
-    let m = market.make_match_orders_transaction(1)?;
+    let m = market.make_match_orders_transaction(1).await?;
     println!("Match Order Results: {:?}", m);
 
     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     let limit = 10;
 
-    let e = market.make_consume_events_instruction(open_orders_accounts.clone(), limit)?;
+    let e = market.make_consume_events_instruction(open_orders_accounts.clone(), limit).await?;
     println!("Consume Events Results: {:?}", e);
 
-    let p =
-        market.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit)?;
+    let p = market.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
     println!("Consume Events Permissioned Results: {:?}", p);
 
     Ok(())
-}
+ }
 ```
 
 ## 🎨 Options
@@ -166,7 +151,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 | Option                   | Default Value | Description                                              |
 |--------------------------|---------------|----------------------------------------------------------|
 | `place --bid <BID>`      | -         | Place a limit bid with the specified amount.             |
-| `cancel --order <ORDER>` | -             | Cancel an existing order with the given order ID.        |
+| `cancel --bid <BID>` | -             | Cancel an existing order with the given order ID.        |
 | `settle`                 | -             | Settle balances in the OpenBook market.                  |
 | `match --order <ORDER>` | -          | match orders transaction with the specified number of orders to match. |
 | `consume --limit <LIMIT>` | -       | consume events instruction with the specified limit. |

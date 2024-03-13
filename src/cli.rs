@@ -95,6 +95,8 @@ pub enum Commands {
     Load(Load),
     /// Find open orders accounts for owner.
     Find(Find),
+    /// Fetch Market Info.
+    Info(Info),
 }
 
 /// Represents options for placing a limit bid in the OpenBook market.
@@ -168,3 +170,8 @@ pub struct Find {
     #[arg(short, long)]
     pub future_option: String,
 }
+
+/// Represents options for fetching the OpenBook market info.
+#[cfg(feature = "cli")]
+#[derive(Args, Debug, Clone)]
+pub struct Info {}
