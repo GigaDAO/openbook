@@ -69,10 +69,10 @@ pub struct Market {
     pub pc_lot_size: u64,
 
     /// The public key of the account holding USDC tokens.
-    pub usdc_ata: Pubkey,
+    pub quote_ata: Pubkey,
 
-    /// The public key of the account holding WSOL tokens.
-    pub wsol_ata: Pubkey,
+    /// The public key of the base market token.
+    pub base_ata: Pubkey,
 
     /// The public key of the vault holding base currency (coin) tokens.
     pub coin_vault: Pubkey,
@@ -158,8 +158,8 @@ impl Market {
         market_name: &'static str,
         keypair: Keypair,
     ) -> Self {
-        let usdc_ata = get_market_name("usdc").1.parse().unwrap();
-        let wsol_ata = get_market_name("sol").1.parse().unwrap();
+        let quote_ata = get_market_name("usdc").1.parse().unwrap();
+        let base_ata = get_market_name("sol").1.parse().unwrap();
         let orders_key = Default::default();
         let coin_vault = Default::default();
         let pc_vault = Default::default();
@@ -189,8 +189,8 @@ impl Market {
             pc_decimals: 6,
             coin_lot_size: 1_000_000,
             pc_lot_size: 1,
-            usdc_ata,
-            wsol_ata,
+            quote_ata,
+            base_ata,
             coin_vault,
             pc_vault,
             vault_signer_key,
@@ -201,13 +201,8 @@ impl Market {
             open_orders_accounts_cache,
             market_info,
         };
-        market.load().await.unwrap();
-        let ata_address = market
-            .find_or_create_associated_token_account(&market.keypair, &market_address)
-            .await
-            .unwrap();
 
-        let oos_key_str = std::env::var("OOS_KEY").unwrap_or(ata_address.to_string());
+        let oos_key_str = std::env::var("OOS_KEY").unwrap_or("".to_string());
 
         let orders_key = Pubkey::from_str(oos_key_str.as_str());
 
@@ -227,6 +222,12 @@ impl Market {
         } else {
             market.orders_key = orders_key.unwrap();
         }
+
+        market.load().await.unwrap();
+        // let _ata_address = market
+        //     .find_or_create_associated_token_account(&market.keypair, &market_address)
+        //     .await
+        //     .unwrap();
 
         market
     }
@@ -695,17 +696,21 @@ impl Market {
         )
     }
 
-    /// Places a limit bid order on the market.
+    /// Places a limit order on the market.
     ///
     /// # Arguments
     ///
     /// * `&self` - A reference to the `Market` struct.
-    /// * `max_bid` - The maximum bid value for the order.
+    /// * `target_amount_quote` - The target amount in quote currency for the order.
+    /// * `side` - The side of the order (buy or sell).
+    /// * `best_offset_usdc` - The best offset in USDC for the order.
+    /// * `execute` - A boolean indicating whether to execute the order immediately.
+    /// * `target_price` - The target price for the order.
     ///
     /// # Returns
     ///
     /// A `Result` containing the transaction signature if successful,
-    /// or an error if placing the limit bid fails.
+    /// or an error if placing the limit order fails.
     ///
     /// # Errors
     ///
@@ -717,6 +722,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::matching::Side;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -729,19 +735,82 @@ impl Market {
     ///
     ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
-    ///     let limit_bid = 2;
-    ///     let result = market.place_limit_bid(limit_bid).await?;
+    ///     let target_amount_quote = 10.0;
+    ///     let side = Side::Bid; // or Side::Ask
+    ///     let best_offset_usdc = 0.5;
+    ///     let execute = true;
+    ///     let target_price = 15.0;
+    ///
+    ///     let result = market.place_limit_order(
+    ///         target_amount_quote,
+    ///         side,
+    ///         best_offset_usdc,
+    ///         execute,
+    ///         target_price
+    ///     ).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn place_limit_bid(&self, max_bid: u64) -> anyhow::Result<Signature, ClientError> {
-        assert!(max_bid > 0, "Max bid must be greater than zero");
-        let limit_price = NonZeroU64::new(max_bid).unwrap();
-        let max_coin_qty = NonZeroU64::new(self.coin_lot_size).unwrap();
-        let target_usdc_lots_w_fee = (1.0 * 1e6 * 1.1) as u64;
+    pub async fn place_limit_order(
+        &self,
+        target_amount_quote: f64,
+        side: Side,
+        best_offset_usdc: f64,
+        execute: bool,
+        target_price: f64,
+    ) -> anyhow::Result<Option<Signature>, ClientError> {
+        // coin: base
+        // pc: quote
+        let base_d_factor = 10u32.pow(self.coin_decimals as u32) as f64;
+        let quote_d_factor = 10u32.pow(self.pc_decimals as u32) as f64;
+        let base_lot_factor = self.coin_lot_size as f64;
+        let quote_lot_factor = 10u32.pow(self.pc_lot_size as u32) as f64;
+
+        let price_factor = quote_d_factor * base_lot_factor / base_d_factor / quote_lot_factor;
+
+        let (input_ata, price) = match side {
+            Side::Bid => {
+                let mut price = self.market_info.max_bid as f64 / price_factor - best_offset_usdc;
+                if !execute {
+                    price = target_price;
+                }
+
+                (&self.quote_ata, price)
+            }
+            Side::Ask => {
+                let mut price = self.market_info.min_ask as f64 / price_factor + best_offset_usdc;
+                if !execute {
+                    price = target_price;
+                }
+
+                (&self.base_ata, price)
+            }
+        };
+
+        let limit_price_lots = (price * price_factor) as u64;
+        let target_amount_base = target_amount_quote / price;
+
+        let target_base_lots = (target_amount_base * base_d_factor / base_lot_factor) as u64;
+        let target_quote_lots_w_fee =
+            (target_base_lots as f64 * quote_lot_factor * limit_price_lots as f64) as u64;
+
+        debug!("[*] Using limit price lots: {:?}", limit_price_lots);
+        debug!("[*] Using target base lots: {:?}", target_base_lots);
+
+        if target_base_lots == 0 {
+            debug!(
+                "[*] Got zero base lots, and quote: {:?}",
+                target_amount_quote
+            );
+            return Ok(None);
+        }
+
+        let limit_price = NonZeroU64::new(limit_price_lots).unwrap();
+        let max_coin_qty = NonZeroU64::new(target_base_lots).unwrap(); // max wsol lots
+        let max_native_pc_qty_including_fees = NonZeroU64::new(target_quote_lots_w_fee).unwrap(); // max usdc lots + fees
 
         let place_order_ix = openbook_dex::instruction::new_order(
             &self.market_address,
@@ -750,7 +819,7 @@ impl Market {
             &self.event_queue,
             &self.market_info.bids_address,
             &self.market_info.asks_address,
-            &self.usdc_ata,
+            &input_ata,
             &self.keypair.pubkey(),
             &self.coin_vault,
             &self.pc_vault,
@@ -765,7 +834,7 @@ impl Market {
             random::<u64>(),
             SelfTradeBehavior::AbortTransaction,
             u16::MAX,
-            NonZeroU64::new(target_usdc_lots_w_fee).unwrap(),
+            max_native_pc_qty_including_fees,
             (get_unix_secs() + 30) as i64,
         )
         .unwrap();
@@ -782,23 +851,25 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        self.rpc_client
-            .0
-            .send_transaction_with_config(&txn, config)
-            .await
+        Ok(Some(
+            self.rpc_client
+                .0
+                .send_transaction_with_config(&txn, config)
+                .await?,
+        ))
     }
 
-    /// Cancels an existing order in the market.
+    /// Cancels all limit orders in the market.
     ///
     /// # Arguments
     ///
     /// * `&self` - A reference to the `Market` struct.
-    /// * `order_id` - The identifier of the order to be canceled.
+    /// * `execute` - A boolean indicating whether to execute the order immediately.
     ///
     /// # Returns
     ///
     /// A `Result` containing the transaction signature if successful,
-    /// or an error if canceling the order fails.
+    /// or an error if canceling all orders fails.
     ///
     /// # Errors
     ///
@@ -822,35 +893,58 @@ impl Market {
     ///
     ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
-    ///     let order_id_to_cancel = 2;
-    ///     let result = market.cancel_order(order_id_to_cancel).await?;
+    ///     let result = market.cancel_orders(true).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn cancel_order(&self, order_id: u64) -> anyhow::Result<Signature, ClientError> {
-        assert!(order_id > 0, "Order ID must be greater than zero");
+    pub async fn cancel_orders(
+        &self,
+        execute: bool,
+    ) -> anyhow::Result<Option<Signature>, ClientError> {
+        let mut ixs = Vec::new();
 
-        let ix = openbook_dex::instruction::cancel_order(
-            &self.program_id,
-            &self.market_address,
-            &self.market_info.bids_address,
-            &self.market_info.asks_address,
-            &self.orders_key,
-            &self.keypair.pubkey(),
-            &self.event_queue,
-            Side::Bid,
-            order_id as u128,
-        )
-        .unwrap();
+        for oid in &self.market_info.open_bids {
+            let ix = openbook_dex::instruction::cancel_order(
+                &self.program_id,
+                &self.market_address,
+                &self.market_info.bids_address,
+                &self.market_info.asks_address,
+                &self.orders_key,
+                &self.keypair.pubkey(),
+                &self.event_queue,
+                Side::Bid,
+                *oid,
+            )
+            .unwrap();
+            ixs.push(ix);
+        }
 
-        let instructions = vec![ix];
+        for oid in &self.market_info.open_asks {
+            let ix = openbook_dex::instruction::cancel_order(
+                &self.program_id,
+                &self.market_address,
+                &self.market_info.bids_address,
+                &self.market_info.asks_address,
+                &self.orders_key,
+                &self.keypair.pubkey(),
+                &self.event_queue,
+                Side::Ask,
+                *oid,
+            )
+            .unwrap();
+            ixs.push(ix);
+        }
+
+        if ixs.len() == 0 || !execute {
+            return Ok(None);
+        }
 
         let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
         let txn = Transaction::new_signed_with_payer(
-            &instructions,
+            &ixs,
             Some(&self.keypair.pubkey()),
             &[&self.keypair],
             recent_hash,
@@ -858,10 +952,12 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        self.rpc_client
-            .0
-            .send_transaction_with_config(&txn, config)
-            .await
+        Ok(Some(
+            self.rpc_client
+                .0
+                .send_transaction_with_config(&txn, config)
+                .await?,
+        ))
     }
 
     /// Settles the balance for a user in the market.
@@ -869,6 +965,7 @@ impl Market {
     /// # Arguments
     ///
     /// * `&self` - A reference to the `Market` struct.
+    /// * `execute` - A boolean indicating whether to execute the order immediately.
     ///
     /// # Returns
     ///
@@ -897,14 +994,17 @@ impl Market {
     ///
     ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
-    ///     let result = market.settle_balance().await?;
+    ///     let result = market.settle_balance(true).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn settle_balance(&self) -> anyhow::Result<Signature, ClientError> {
+    pub async fn settle_balance(
+        &self,
+        execute: bool,
+    ) -> anyhow::Result<Option<Signature>, ClientError> {
         let ix = openbook_dex::instruction::settle_funds(
             &self.program_id,
             &self.market_address,
@@ -912,15 +1012,19 @@ impl Market {
             &self.orders_key,
             &self.keypair.pubkey(),
             &self.coin_vault,
-            &self.wsol_ata,
+            &self.base_ata,
             &self.pc_vault,
-            &self.usdc_ata,
+            &self.quote_ata,
             None,
             &self.vault_signer_key,
         )
         .unwrap();
 
         let instructions = vec![ix];
+
+        if !execute {
+            return Ok(None);
+        }
 
         let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
         let txn = Transaction::new_signed_with_payer(
@@ -932,10 +1036,12 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        self.rpc_client
-            .0
-            .send_transaction_with_config(&txn, config)
-            .await
+        Ok(Some(
+            self.rpc_client
+                .0
+                .send_transaction_with_config(&txn, config)
+                .await?,
+        ))
     }
 
     /// Creates a new transaction to match orders in the market.
@@ -1039,8 +1145,8 @@ impl Market {
     ///     Ok(())
     /// }
     /// ```
-    pub fn load_bids(&mut self) -> Result<MarketInfo, ProgramError> {
-        self.load_orders(self.market_info.bids_address)
+    pub fn load_bids(&mut self) -> Result<Vec<u128>, ProgramError> {
+        Ok(self.market_info.open_bids.clone())
     }
 
     /// Loads the asks from the market.
@@ -1078,26 +1184,8 @@ impl Market {
     ///     Ok(())
     /// }
     /// ```
-    pub fn load_asks(&mut self) -> Result<MarketInfo, ProgramError> {
-        self.load_orders(self.market_info.asks_address)
-    }
-
-    /// Loads orders from the specified address.
-    ///
-    /// # Arguments
-    ///
-    /// * `address` - The address from which to load orders.
-    ///
-    /// # Returns
-    ///
-    /// The orders stored at the specified address.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there is an issue with loading the orders.
-    pub fn load_orders(&mut self, _address: Pubkey) -> anyhow::Result<MarketInfo, ProgramError> {
-        // let account_info: Vec<u8> = self.rpc_client.0.get_account_data(&address).unwrap();
-        Ok(self.market_info.clone())
+    pub fn load_asks(&mut self) -> Result<Vec<u128>, ProgramError> {
+        Ok(self.market_info.open_asks.clone())
     }
 
     /// Consumes events from the market for specified open orders accounts.
@@ -1239,7 +1327,6 @@ impl Market {
     /// # Arguments
     ///
     /// * `&mut self` - A mutable reference to the `Market` struct.
-    /// * `cache_duration_ms` - The duration in milliseconds for which to cache open orders accounts.
     ///
     /// # Returns
     ///
@@ -1263,24 +1350,25 @@ impl Market {
     ///
     ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
-    ///     let result = market.load_orders_for_owner(5000).await?;
+    ///     let result = market.load_orders_for_owner().await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn load_orders_for_owner(
-        &mut self,
-        cache_duration_ms: u64,
-    ) -> Result<Vec<Account>, Box<dyn std::error::Error>> {
-        let _bids = self.load_bids()?;
-        let _asks = self.load_asks()?;
-        let open_orders_accounts = self
-            .find_open_orders_accounts_for_owner(&self.keypair.pubkey(), cache_duration_ms)
-            .await?;
+    pub async fn load_orders_for_owner(&mut self) -> Result<Vec<u128>, Box<dyn std::error::Error>> {
+        let mut bids = self.load_bids()?;
+        let asks = self.load_asks()?;
+        bids.extend(asks);
+        // let open_orders_accounts = self
+        //     .find_open_orders_accounts_for_owner(
+        //         &self.orders_key.clone(),
+        //         5000,
+        //     )
+        //     .await?;
 
-        Ok(open_orders_accounts)
+        Ok(bids)
     }
 
     /// Filters open orders accounts based on bids and asks.

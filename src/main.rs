@@ -9,10 +9,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         use clap::Parser;
         use openbook::cli::{Cli, Commands};
+        use openbook::commitment_config::CommitmentConfig;
         use openbook::market::Market;
+        use openbook::matching::Side;
         use openbook::rpc_client::RpcClient;
         use openbook::utils::read_keypair;
-        use solana_sdk::commitment_config::CommitmentConfig;
 
         let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set");
         let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set");
@@ -31,19 +32,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[*] Market Info: {:?}", market);
             }
             Some(Commands::Place(arg)) => {
-                let r = market.place_limit_bid(arg.bid).await?;
-                println!("[*] Transaction successful, signature: {:?}", r);
+                let side = match arg.side.as_str() {
+                    "bid" => Side::Bid,
+                    "ask" => Side::Ask,
+                    _ => Side::Bid,
+                };
+
+                let result = market
+                    .place_limit_order(
+                        arg.target_amount_quote,
+                        side,
+                        arg.best_offset_usdc,
+                        arg.execute,
+                        arg.price_target,
+                    )
+                    .await?;
+                println!(
+                    "[*] Transaction successful, signature: {:?}",
+                    result.unwrap()
+                );
             }
             Some(Commands::Cancel(arg)) => {
-                let c = market.cancel_order(arg.order).await?;
+                let c = market.cancel_orders(arg.execute).await?;
                 println!("[*] Transaction successful, signature: {:?}", c);
             }
-            Some(Commands::Settle(_arg)) => {
-                let s = market.settle_balance().await?;
-                println!("[*] Transaction successful, signature: {:?}", s);
+            Some(Commands::Settle(arg)) => {
+                let result = market.settle_balance(arg.execute).await?;
+                println!(
+                    "[*] Transaction successful, signature: {:?}",
+                    result.unwrap()
+                );
             }
             Some(Commands::Match(arg)) => {
-                let m = market.make_match_orders_transaction(arg.order).await?;
+                let m = market.make_match_orders_transaction(arg.limit).await?;
                 println!("[*] Transaction successful, signature: {:?}", m);
             }
             Some(Commands::Consume(arg)) => {
@@ -58,8 +79,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
                 println!("[*] Transaction successful, signature: {:?}", p);
             }
-            Some(Commands::Load(arg)) => {
-                let l = market.load_orders_for_owner(arg.num).await?;
+            Some(Commands::Load(_arg)) => {
+                let l = market.load_orders_for_owner().await?;
                 println!("[*] Found Program Accounts: {:?}", l);
             }
             Some(Commands::Find(_arg)) => {
