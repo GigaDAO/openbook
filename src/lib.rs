@@ -36,7 +36,7 @@
 //!    
 //!     let keypair = read_keypair(&key_path);
 //!    
-//!     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
+//!     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
 //!    
 //!     println!("Initialized Market: {:?}", market);
 //!
