@@ -1,0 +1,39 @@
+# Rust CircleCI 2.1 configuration file
+version: 2.1
+aliases:
+  - &rust_container
+    docker:
+      - image: cimg/rust:1.73.0
+
+  - &install_solana
+    run:
+      name: Install Solana CLI
+      command: |
+        sudo apt-get -qq update
+        sh -c "$(curl -sSfL https://release.solana.com/v1.18.3/install)"
+        export PATH="~/.local/share/solana/install/active_release/bin:$PATH"
+
+  - &set_env_vars
+    run:
+      name: Setup Environment Variables
+      command: |
+        echo export KEY=${KEY} >> ${KEY_PATH}
+
+jobs:
+  testing:
+    <<: *container_rust
+    steps:
+      - checkout
+      - *rust_container
+      - *install_solana
+      - *set_env_vars
+      - run:
+          name: Run Tests
+          command: |
+            cargo test
+
+workflows:
+  version: 2
+  test:
+    jobs:
+      - testing
