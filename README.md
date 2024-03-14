@@ -41,14 +41,18 @@ Before using the `openbook` crate or CLI, make sure to set the following environ
 ```bash
 export RPC_URL=https://api.mainnet-beta.solana.com
 export KEY_PATH=<path_to_your_key_file>
-export MARKET_ID=8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6
-export OPENBOOK_V1_PROGRAM_ID=srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX
 ```
 
 > [!NOTE]
 > Certain RPC methods, like `getProgramAccounts`, are no longer available on `api.mainnet-beta.solana.com`. We recommend utilizing [helius.dev](https://www.helius.dev) as an alternative.
 
 ## ⌨ Usage as CLI
+
+### Get Market Info:
+
+```sh
+openbook info
+```
 
 ### Place a limit bid:
 
@@ -90,7 +94,7 @@ openbook load --num 20
 
 ```toml
 [dependencies]
-openbook = "0.0.2"
+openbook = "0.0.3"
 ```
 
 ```rust

@@ -2,6 +2,7 @@
 use crate::{
     orders::{MarketInfo, OpenOrders, OpenOrdersCacheEntry},
     rpc_client::RpcClient,
+    tokens_and_markets::{get_market_name, get_program_id},
     utils::{get_unix_secs, u64_slice_to_bytes},
 };
 use log::debug;
@@ -111,17 +112,17 @@ impl fmt::Debug for DebuggableRpcClient {
 
 impl Market {
     /// This function is responsible for creating a new instance of the `Market` struct, representing an OpenBook market
-    /// on the Solana blockchain. It requires essential parameters such as the RPC client, program ID, market address,
+    /// on the Solana blockchain. It requires essential parameters such as the RPC client, program version, market name,
     /// and a keypair for transaction signing. The example demonstrates how to set up the necessary environment variables,
     /// initialize the RPC client, and read the keypair from a file path. After initializing the market, information about
     /// the newly created instance is printed for verification and further usage. Ensure that the required environment variables,
-    /// such as `RPC_URL`, `KEY_PATH`, and `OPENBOOK_V1_PROGRAM_ID`, are appropriately configured before executing this method.
+    /// such as `RPC_URL`, `KEY_PATH` are appropriately configured before executing this method.
     ///
     /// # Arguments
     ///
     /// * `rpc_client` - The RPC client for interacting with the Solana blockchain.
-    /// * `program_id` - The program ID associated with the market.
-    /// * `market_address` - The public key representing the market.
+    /// * `program_version` - The program dex version representing the market.
+    /// * `market_name` - The market name.
     /// * `keypair` - The keypair used for signing transactions.
     ///
     /// # Returns
@@ -139,25 +140,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
-    ///     // Create a new RPC client instance for Solana blockchain interaction.
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
-    ///     // Read the keypair for signing transactions.
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     // Initialize a new Market instance with default configurations.
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
-    ///     // Print information about the initialized Market.
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     println!("Initialized Market: {:?}", market);
     ///
     ///     Ok(())
@@ -165,8 +154,8 @@ impl Market {
     /// ```
     pub async fn new(
         rpc_client: RpcClient,
-        program_id: Pubkey,
-        market_address: Pubkey,
+        program_version: u8,
+        market_name: &'static str,
         keypair: Keypair,
     ) -> Self {
         let usdc_ata = Default::default();
@@ -180,6 +169,8 @@ impl Market {
         let market_info = Default::default();
 
         let decoded = Default::default();
+        let program_id = get_program_id(program_version).parse().unwrap();
+        let market_address = get_market_name(market_name).parse().unwrap();
         let open_orders = OpenOrders::new(market_address, decoded, keypair.pubkey());
         let mut open_orders_accounts_cache = HashMap::new();
 
@@ -187,7 +178,6 @@ impl Market {
             accounts: vec![open_orders],
             ts: 123456789,
         };
-
         open_orders_accounts_cache.insert(keypair.pubkey(), open_orders_cache_entry);
 
         let mut market = Self {
@@ -229,7 +219,7 @@ impl Market {
         let orders_key = Pubkey::from_str(oos_key_str.as_str());
 
         if orders_key.is_err() {
-            debug!("Orders Key not found, creating Orders Key...");
+            debug!("[*] Orders Key not found, creating Orders Key...");
 
             let key = OpenOrders::make_create_account_transaction(
                 &market.rpc_client.0,
@@ -239,7 +229,7 @@ impl Market {
             )
             .await
             .unwrap();
-            debug!("Orders Key created successfully!");
+            debug!("[*] Orders Key created successfully!");
             market.orders_key = key;
         } else {
             market.orders_key = orders_key.unwrap();
@@ -270,24 +260,16 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
-    ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
-    ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
-    ///     let result = market.get_mint_address("USDC").await?;
     ///
-    ///     println!("{:?}", result);
+    ///     let rpc_client = RpcClient::new(rpc_url);
+    ///
+    ///     let keypair = read_keypair(&key_path);
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
+    ///     // let result = market.get_mint_address("USDC").await?;
+    ///
+    ///     // println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
@@ -300,7 +282,7 @@ impl Market {
             .await?;
 
         for _token_account in token_accounts {
-            // TODO
+            // TODO: Find mint token and return it
         }
 
         Err("Mint address not found".into())
@@ -334,14 +316,14 @@ impl Market {
             .await?;
 
         for token in tokens {
-            debug!("Found Token: {:?}", token);
+            debug!("[*] Found Token: {:?}", token);
             if token.pubkey == ata_address.to_string() {
-                debug!("Found ATA: {:?}", ata_address);
+                debug!("[*] Found ATA: {:?}", ata_address);
                 return Ok(ata_address);
             }
         }
 
-        debug!("ATA not found, creating ATA");
+        debug!("[*] ATA not found, creating ATA");
 
         let create_ata_ix = create_associated_token_account(
             &wallet.pubkey(),
@@ -361,8 +343,8 @@ impl Market {
             .await;
 
         match result {
-            Ok(sig) => debug!("Transaction successful, signature: {:?}", sig),
-            Err(err) => debug!("Transaction failed: {:?}", err),
+            Ok(sig) => debug!("[*] Transaction successful, signature: {:?}", sig),
+            Err(err) => debug!("[*] Transaction failed: {:?}", err),
         };
 
         Ok(ata_address)
@@ -430,7 +412,7 @@ impl Market {
         account_info: &'a AccountInfo<'_>,
     ) -> anyhow::Result<RefMut<MarketState>> {
         let account_data = account_info.deserialize_data::<NonceData>()?;
-        debug!("Account Data: {:?}", account_data);
+        debug!("[*] Account Data: {:?}", account_data);
         let mut market_state = MarketState::load(account_info, &self.program_id, false)?;
 
         {
@@ -558,7 +540,7 @@ impl Market {
                     let price_raw = node.price().get();
                     let ui_price = price_raw as f64 / 1e4;
 
-                    debug!("bid: {price_raw}");
+                    debug!("[*] Bid: {price_raw}");
 
                     if max_bid == 0 {
                         max_bid = price_raw;
@@ -611,7 +593,7 @@ impl Market {
                     let price_raw = node.price().get();
                     let ui_price = price_raw as f64 / 1e4;
 
-                    debug!("ask: {price_raw}");
+                    debug!("[*] Ask: {price_raw}");
 
                     if min_ask == 0 {
                         min_ask = price_raw;
@@ -648,27 +630,23 @@ impl Market {
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
     /// use openbook::state::MarketState;
+    /// use openbook::tokens_and_markets::{get_market_name, get_program_id};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
+    ///     let program_id = get_program_id(3).parse().unwrap();
+    ///     let market_address = get_market_name("openbook").parse().unwrap();
+    ///
     ///     let rpc_client1 = RpcClient::new(rpc_url.clone());
     ///     let rpc_client2 = RpcClient::new(rpc_url.clone());
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client1, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client1, 3, "openbook", keypair).await;
+    ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
     ///     let account_info = market.create_account_info_from_account(
@@ -678,8 +656,12 @@ impl Market {
     ///         false,
     ///         false,
     ///     );
+    ///
     ///     let mut market_state = MarketState::load(&account_info, &program_id, false)?;
     ///     let (bids_address, asks_address) = market.get_bids_asks_addresses(&market_state);
+    ///
+    ///     assert_eq!(&bids_address.to_string(), "5jWUncPNBMZJ3sTHKmMLszypVkoRK6bfEQMQUHweeQnh");
+    ///     assert_eq!(&asks_address.to_string(), "EaXdHx7x3mdGA38j5RSmKYSXMzAFzzUXCLNBEDXDn1d5");
     ///
     ///     Ok(())
     /// }
@@ -715,6 +697,7 @@ impl Market {
     ///
     /// ```rust
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::tokens_and_markets::{get_market_name, get_program_id};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
     /// use openbook::state::MarketState;
@@ -723,22 +706,17 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
+    ///     let program_id = get_program_id(3).parse().unwrap();
+    ///     let market_address = get_market_name("openbook").parse().unwrap();
+    ///
     ///     let rpc_client1 = RpcClient::new(rpc_url.clone());
     ///     let rpc_client2 = RpcClient::new(rpc_url.clone());
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client1, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client1, 3, "openbook", keypair).await;
+    ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
     ///     let account_info = market.create_account_info_from_account(
@@ -801,21 +779,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let limit_bid = 2;
     ///     let result = market.place_limit_bid(limit_bid).await?;
     ///
@@ -902,21 +872,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let order_id_to_cancel = 2;
     ///     let result = market.cancel_order(order_id_to_cancel).await?;
     ///
@@ -985,21 +947,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let result = market.settle_balance().await?;
     ///
     ///     println!("{:?}", result);
@@ -1066,21 +1020,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let result = market.make_match_orders_transaction(100).await?;
     ///
     ///     println!("{:?}", result);
@@ -1136,21 +1082,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let result = market.load_bids()?;
     ///
     ///     println!("{:?}", result);
@@ -1183,21 +1121,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let result = market.load_asks()?;
     ///
     ///     println!("{:?}", result);
@@ -1250,21 +1180,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
     ///     let result = market.make_consume_events_instruction(open_orders_accounts, limit).await?;
@@ -1324,21 +1246,13 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
-    ///    
+    ///
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
     ///     let result = market.make_consume_events_permissioned_instruction(open_orders_accounts, limit).await?;
@@ -1399,20 +1313,12 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
-    ///    
-    ///     let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
+    ///
+    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
     ///
     ///     let result = market.load_orders_for_owner(5000).await?;
     ///
@@ -1458,20 +1364,12 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, program_id, market_address, keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
     ///
     ///     let bids = market.market_info.clone();
     ///     let asks = market.market_info.clone();
@@ -1524,20 +1422,12 @@ impl Market {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///     let market_address = std::env::var("MARKET_ID")
-    ///         .expect("MARKET_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-    ///         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-    ///         .parse()
-    ///         .unwrap();
-    ///    
+    ///
     ///     let rpc_client = RpcClient::new(rpc_url);
-    ///    
+    ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
     ///     let owner_address = &Pubkey::new_from_array([0; 32]);
     ///
     ///     let result = market.find_open_orders_accounts_for_owner(&owner_address, 5000).await?;

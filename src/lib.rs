@@ -9,8 +9,6 @@
 //! ```bash
 //! export RPC_URL=https://api.mainnet-beta.solana.com
 //! export KEY_PATH=<path_to_your_key_file>
-//! export MARKET_ID=8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6
-//! export OPENBOOK_V1_PROGRAM_ID=srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX
 //! ```
 //!
 //! Get started with the `openbook` crate by following these simple steps:
@@ -19,7 +17,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! openbook = "0.0.2"
+//! openbook = "0.0.3"
 //! ```
 //!
 //! 2. Use the `Market` struct to perform various operations in the OpenBook market:
@@ -33,20 +31,12 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
 //!     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-//!     let market_address = std::env::var("MARKET_ID")
-//!         .expect("MARKET_ID is not set in .env file")
-//!         .parse()
-//!         .unwrap();
-//!     let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-//!         .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-//!         .parse()
-//!         .unwrap();
 //!    
 //!     let rpc_client = RpcClient::new(rpc_url);
 //!    
 //!     let keypair = read_keypair(&key_path);
 //!    
-//!     let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
+//!     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
 //!    
 //!     println!("Initialized Market: {:?}", market);
 //!
