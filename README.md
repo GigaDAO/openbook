@@ -94,7 +94,7 @@ openbook load --num 20
 
 ```toml
 [dependencies]
-openbook = "0.0.3"
+openbook = "0.0.4"
 ```
 
 ```rust
