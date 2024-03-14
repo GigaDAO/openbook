@@ -17,14 +17,14 @@ aliases:
     run:
       name: Setup Environment Variables
       command: |
+        mkdir -p "$(dirname "${KEY_PATH}")" && touch "${KEY_PATH}"
         echo export KEY=${KEY} >> ${KEY_PATH}
 
 jobs:
   testing:
-    <<: *container_rust
+    <<: *rust_container
     steps:
       - checkout
-      - *rust_container
       - *install_solana
       - *set_env_vars
       - run:
