@@ -26,33 +26,42 @@
 //! use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
 //! use openbook::market::Market;
 //! use openbook::utils::read_keypair;
+//! use openbook::matching::Side;
+//! use openbook::commitment_config::CommitmentConfig;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
 //!     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-//!    
-//!     let rpc_client = RpcClient::new(rpc_url);
+//!
+//!     let commitment_config = CommitmentConfig::confirmed();
+//!     let rpc_client = RpcClient::new_with_commitment(rpc_url, commitment_config);
 //!    
 //!     let keypair = read_keypair(&key_path);
 //!    
 //!     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
-//!    
+//!
 //!     println!("Initialized Market: {:?}", market);
 //!
-//!     let max_bid = 1;
-//!     let r = market.place_limit_bid(max_bid).await?;
-//!     println!("Place Order Results: {:?}", r);
+//!     let r = market
+//!         .place_limit_order(
+//!             10.0,
+//!             Side::Bid, // or Side::Ask
+//!             0.5,
+//!             true,
+//!             15.0,
+//!         )
+//!     .await?;
+//!     println!("Place Limit Order Result: {:?}", r);
 //!
-//!     let order_id_to_cancel = 2;
-//!     let c = market.cancel_order(order_id_to_cancel).await?;
-//!     println!("Cancel Order Results: {:?}", c);
+//!     let c = market.cancel_orders(true).await?;
+//!     println!("Cancel Orders Result: {:?}", c);
 //!
-//!     let s = market.settle_balance().await?;
-//!     println!("Settle Balance Results: {:?}", s);
+//!     let s = market.settle_balance(true).await?;
+//!     println!("Settle Balance Result: {:?}", s);
 //!
 //!     let m = market.make_match_orders_transaction(1).await?;
-//!     println!("Match Order Results: {:?}", m);
+//!     println!("Match Order Result: {:?}", m);
 //!
 //!     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
 //!     let limit = 10;
@@ -60,8 +69,7 @@
 //!     let e = market.make_consume_events_instruction(open_orders_accounts.clone(), limit).await?;
 //!     println!("Consume Events Results: {:?}", e);
 //!
-//!     let p =
-//!         market.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
+//!     let p = market.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
 //!     println!("Consume Events Permissioned Results: {:?}", p);
 //!
 //!     Ok(())
@@ -70,16 +78,17 @@
 //!
 //! ## Options
 //!
-//! | Subcommand                           | Description                                              |
-//! |--------------------------------------|----------------------------------------------------------|
-//! | `place --bid <BID>`                  | Place a limit bid with the specified amount.             |
-//! | `cancel --order <ORDER>`             | Cancel an existing order with the given order ID.        |
-//! | `settle`                             | Settle balances in the OpenBook market.                  |
-//! | `match --order <ORDER>`         | Match orders transaction with the specified number of orders to match. |
-//! | `consume --limit <LIMIT>`       | Consume events instruction with the specified limit. |
-//! | `consume-permissioned --limit <LIMIT>` | Consume events permissioned instruction with the specified limit. |
-//! | `load --num <NUM>`                   | Load orders for a specific owner with the specified number. |
-//! | `find-open-accounts`                 | Find open orders accounts for a specific owner.           |
+//! | Option                                 | Default Value | Description                                              |
+//! |----------------------------------------|---------------|----------------------------------------------------------|
+//! | `place -t <TARGET_AMOUNT_QUOTE> -s <SIDE> -b <BEST_OFFSET_USDC> -e -p <PRICE_TARGET>` | - | Place a limit order with the specified parameters.       |
+//! | `cancel -e`                            | -             | Cancel all existing order for the current owner.        |
+//! | `settle -e`                            | -             | Settle balances in the OpenBook market.                  |
+//! | `match --limit <LIMIT>`                | -             | Match orders transaction with the specified limit.      |
+//! | `consume --limit <LIMIT>`              | -             | Consume events instruction with the specified limit.     |
+//! | `consume-permissioned --limit <LIMIT>` | -             | Consume events permissioned instruction with the specified limit. |
+//! | `find --future_option <FUTURE_OPTION>` | -             | Find open orders accounts for a specific owner.          |
+//! | `load`                                 | -             | Load orders for the current owner, bids + asks.                      |
+//! | `info`                                 | -             | Fetch OpenBook market info.                              |
 //!
 //! ## GitHub Repository
 //!
@@ -100,11 +109,13 @@ pub mod tokens_and_markets;
 pub mod utils;
 
 // Re-export common func
+pub use openbook_dex::matching;
 pub use openbook_dex::state;
 pub use solana_client::rpc_filter;
 pub use solana_program::pubkey;
 pub use solana_rpc_client::nonblocking::rpc_client;
 pub use solana_sdk::account;
 pub use solana_sdk::bs58;
+pub use solana_sdk::commitment_config;
 pub use solana_sdk::signature;
 pub use solana_sdk::signer::keypair;

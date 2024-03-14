@@ -53,14 +53,17 @@ USAGE:
   openbook [OPTIONS] <COMMAND>
 
 EXAMPLES:
-  Place a limit bid:
-    openbook place --bid 100
+  Place a bid limit order:
+    openbook place -t 10.0 -s bid -b 0.5 -e -p 15.0
 
-  Cancel an order:
-    openbook cancel --order 42
+  Place a ask limit order:
+    openbook place -t 10.0 -s ask -b 0.5 -e -p 15.0
+
+  Cancel all limit orders:
+    openbook cancel -e
 
   Settle balances:
-    openbook settle
+    openbook settle -e
 
 For more information, visit: github.com/wiseaidev/openbook
 "#
@@ -79,7 +82,7 @@ pub struct Cli {
 #[cfg(feature = "cli")]
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    /// Place a limit bid.
+    /// Place a limit order.
     Place(Place),
     /// Cancel an order.
     Cancel(Cancel),
@@ -99,31 +102,47 @@ pub enum Commands {
     Info(Info),
 }
 
-/// Represents options for placing a limit bid in the OpenBook market.
+/// Represents options for placing a limit order in the OpenBook market.
 #[cfg(feature = "cli")]
 #[derive(Args, Debug, Clone)]
 pub struct Place {
-    /// Maximum bid amount.
+    /// Target amount in quote currency.
     #[arg(short, long)]
-    pub bid: u64,
+    pub target_amount_quote: f64,
+
+    /// Side of the order (Bid or Ask).
+    #[arg(short, long)]
+    pub side: String,
+
+    /// Best offset in USDC.
+    #[arg(short, long)]
+    pub best_offset_usdc: f64,
+
+    /// Flag indicating whether to execute the order immediately.
+    #[arg(short, long)]
+    pub execute: bool,
+
+    /// Target price for the order.
+    #[arg(short, long)]
+    pub price_target: f64,
 }
 
 /// Represents options for cancelling an order in the OpenBook market.
 #[cfg(feature = "cli")]
 #[derive(Args, Debug, Clone)]
 pub struct Cancel {
-    /// Order ID to cancel.
+    /// Flag indicating whether to execute the order immediately.
     #[arg(short, long)]
-    pub order: u64,
+    pub execute: bool,
 }
 
 /// Represents options for settling balances in the OpenBook market.
 #[cfg(feature = "cli")]
 #[derive(Args, Debug, Clone)]
 pub struct Settle {
-    /// Comming Soon: future options related to settling balances.
+    /// Flag indicating whether to execute the order immediately.
     #[arg(short, long)]
-    pub future_option: u64,
+    pub execute: bool,
 }
 
 /// Represents options for match orders transactions in the OpenBook market.
@@ -132,7 +151,7 @@ pub struct Settle {
 pub struct Match {
     /// The maximum number of orders to match.
     #[arg(short, long)]
-    pub order: u16,
+    pub limit: u16,
 }
 
 /// Represents options for consume events instructions in the OpenBook market.
@@ -153,14 +172,10 @@ pub struct ConsumePermissioned {
     pub limit: u16,
 }
 
-/// Represents options for loading orders for a specific owner in the OpenBook market.
+/// Represents options for loading orders for the current owner in the OpenBook market.
 #[cfg(feature = "cli")]
 #[derive(Args, Debug, Clone)]
-pub struct Load {
-    /// Number of orders to load.
-    #[arg(short, long)]
-    pub num: u64,
-}
+pub struct Load {}
 
 /// Represents options for finding open orders accounts for a specific owner in the OpenBook market.
 #[cfg(feature = "cli")]

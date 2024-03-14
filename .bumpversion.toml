@@ -4,3 +4,15 @@ current_version = 0.0.4
 [bumpversion:file:Cargo.toml]
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
+
+[bumpversion:file:Cargo.lock]
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[bumpversion:file:README.md]
+search = 'openbook = "{current_version}"'
+replace = 'openbook = "{new_version}"'
+
+[bumpversion:file:src/lib.rs]
+search = '//! openbook = "{current_version}"'
+replace = '//! openbook = "{new_version}"'

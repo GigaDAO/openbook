@@ -9,6 +9,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use log::debug;
 use memoffset::offset_of;
 use solana_client::{
+    rpc_config::RpcSendTransactionConfig,
     rpc_filter::MemcmpEncodedBytes,
     rpc_filter::{Memcmp, MemcmpEncodedBytes::Base58, MemcmpEncoding, RpcFilterType},
 };
@@ -415,7 +416,10 @@ impl OpenOrders {
             recent_hash,
         );
 
-        let result = connection.send_transaction(&txn).await;
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+
+        let result = connection.send_transaction_with_config(&txn, config).await;
 
         match result {
             Ok(sig) => debug!("Transaction successful, signature: {:?}", sig),
