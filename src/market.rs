@@ -145,7 +145,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     println!("Initialized Market: {:?}", market);
     ///
@@ -158,8 +158,8 @@ impl Market {
         market_name: &'static str,
         keypair: Keypair,
     ) -> Self {
-        let usdc_ata = Default::default();
-        let wsol_ata = Default::default();
+        let usdc_ata = get_market_name("usdc").1.parse().unwrap();
+        let wsol_ata = get_market_name("sol").1.parse().unwrap();
         let orders_key = Default::default();
         let coin_vault = Default::default();
         let pc_vault = Default::default();
@@ -170,7 +170,7 @@ impl Market {
 
         let decoded = Default::default();
         let program_id = get_program_id(program_version).parse().unwrap();
-        let market_address = get_market_name(market_name).parse().unwrap();
+        let market_address = get_market_name(market_name).0.parse().unwrap();
         let open_orders = OpenOrders::new(market_address, decoded, keypair.pubkey());
         let mut open_orders_accounts_cache = HashMap::new();
 
@@ -202,20 +202,13 @@ impl Market {
             market_info,
         };
         market.load().await.unwrap();
-        // TODO
-        // self.usdc_ata = market.get_mint_address("USDC").await.unwrap();
-        // self.wsol_ata = market.get_mint_address(rpc_client, "WSOL").unwrap();
         let ata_address = market
             .find_or_create_associated_token_account(&market.keypair, &market_address)
             .await
             .unwrap();
 
-        let usdc_ata_str = std::env::var("USDC_ATA").unwrap_or(ata_address.to_string());
-        let wsol_ata_str = std::env::var("WSOL_ATA").unwrap_or(ata_address.to_string());
         let oos_key_str = std::env::var("OOS_KEY").unwrap_or(ata_address.to_string());
 
-        market.usdc_ata = Pubkey::from_str(usdc_ata_str.as_str()).unwrap_or(ata_address);
-        market.wsol_ata = Pubkey::from_str(wsol_ata_str.as_str()).unwrap_or(ata_address);
         let orders_key = Pubkey::from_str(oos_key_str.as_str());
 
         if orders_key.is_err() {
@@ -236,56 +229,6 @@ impl Market {
         }
 
         market
-    }
-
-    /// Retrieves the mint address for a given token symbol.
-    ///
-    /// # Arguments
-    ///
-    /// * `&self` - A reference to the `Market` struct.
-    /// * `_token_symbol` - A string representing the token symbol.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the `Pubkey` of the mint or a boxed `Error` if an error occurs.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
-    /// use openbook::market::Market;
-    /// use openbook::utils::read_keypair;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
-    ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    ///
-    ///     let rpc_client = RpcClient::new(rpc_url);
-    ///
-    ///     let keypair = read_keypair(&key_path);
-    ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
-    ///
-    ///     // let result = market.get_mint_address("USDC").await?;
-    ///
-    ///     // println!("{:?}", result);
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
-    pub async fn get_mint_address(&self, _token_symbol: &str) -> Result<Pubkey, Box<dyn Error>> {
-        let token_accounts = &self
-            .rpc_client
-            .0
-            .get_token_account(&self.keypair.pubkey())
-            .await?;
-
-        for _token_account in token_accounts {
-            // TODO: Find mint token and return it
-        }
-
-        Err("Mint address not found".into())
     }
 
     /// Finds or creates an associated token account for a given wallet and mint.
@@ -638,14 +581,14 @@ impl Market {
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
     ///
     ///     let program_id = get_program_id(3).parse().unwrap();
-    ///     let market_address = get_market_name("openbook").parse().unwrap();
+    ///     let market_address = get_market_name("usdc").0.parse().unwrap();
     ///
     ///     let rpc_client1 = RpcClient::new(rpc_url.clone());
     ///     let rpc_client2 = RpcClient::new(rpc_url.clone());
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client1, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client1, 3, "usdc", keypair).await;
     ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
@@ -708,14 +651,14 @@ impl Market {
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
     ///
     ///     let program_id = get_program_id(3).parse().unwrap();
-    ///     let market_address = get_market_name("openbook").parse().unwrap();
+    ///     let market_address = get_market_name("usdc").0.parse().unwrap();
     ///
     ///     let rpc_client1 = RpcClient::new(rpc_url.clone());
     ///     let rpc_client2 = RpcClient::new(rpc_url.clone());
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client1, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client1, 3, "usdc", keypair).await;
     ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
@@ -784,7 +727,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let limit_bid = 2;
     ///     let result = market.place_limit_bid(limit_bid).await?;
@@ -877,7 +820,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let order_id_to_cancel = 2;
     ///     let result = market.cancel_order(order_id_to_cancel).await?;
@@ -952,7 +895,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let result = market.settle_balance().await?;
     ///
@@ -1025,7 +968,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let result = market.make_match_orders_transaction(100).await?;
     ///
@@ -1087,7 +1030,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let result = market.load_bids()?;
     ///
@@ -1126,7 +1069,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let result = market.load_asks()?;
     ///
@@ -1185,7 +1128,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
@@ -1251,7 +1194,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
@@ -1318,7 +1261,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let result = market.load_orders_for_owner(5000).await?;
     ///
@@ -1369,7 +1312,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let bids = market.market_info.clone();
     ///     let asks = market.market_info.clone();
@@ -1427,7 +1370,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///     let owner_address = &Pubkey::new_from_array([0; 32]);
     ///
     ///     let result = market.find_open_orders_accounts_for_owner(&owner_address, 5000).await?;

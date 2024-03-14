@@ -109,16 +109,15 @@ pub fn get_unix_secs() -> u64 {
 /// use openbook::rpc_filter::Memcmp;
 /// use openbook::rpc_filter::MemcmpEncodedBytes;
 /// use openbook::{pubkey::Pubkey, account::Account, rpc_client::RpcClient};
+/// use openbook::tokens_and_markets::get_market_name;
 /// use std::str::FromStr;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set");
 ///     let connection = RpcClient::new(rpc_url);
-///     let market_address: Pubkey = std::env::var("MARKET_ID")
-///         .expect("MARKET_ID is not set")
-///         .parse()
-///         .unwrap();
+///     let market_address: Pubkey = get_market_name("usdc").0.parse().unwrap();
+///
 ///     let filters = vec![
 ///         RpcFilterType::Memcmp(Memcmp {
 ///             offset: 32,

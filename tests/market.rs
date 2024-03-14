@@ -11,7 +11,7 @@ async fn test_market_state_info() {
 
     let keypair = read_keypair(&key_path);
 
-    let market = Market::new(rpc_client, 3, "openbook", keypair).await;
+    let market = Market::new(rpc_client, 3, "usdc", keypair).await;
 
     assert_eq!(
         &market.program_id.to_string(),
@@ -37,4 +37,24 @@ async fn test_market_state_info() {
         &market.market_info.asks_address.to_string(),
         "EaXdHx7x3mdGA38j5RSmKYSXMzAFzzUXCLNBEDXDn1d5"
     );
+    assert_eq!(
+        &market.usdc_ata.to_string(),
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    );
+    assert_eq!(
+        &market.wsol_ata.to_string(),
+        "So11111111111111111111111111111111111111112"
+    );
+
+    // Additional Details
+
+    assert_eq!(market.coin_decimals, 9);
+
+    // Base Decimals
+    assert_eq!(market.pc_decimals, 6);
+
+    // Base Lot Size
+    assert_eq!(market.coin_lot_size, 1000000);
+
+    assert_eq!(market.pc_lot_size, 1);
 }

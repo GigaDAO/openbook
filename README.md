@@ -94,7 +94,7 @@ openbook load --num 20
 
 ```toml
 [dependencies]
-openbook = "0.0.3"
+openbook = "0.0.4"
 ```
 
 ```rust
@@ -106,20 +106,12 @@ use openbook::utils::read_keypair;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
-    let market_address = std::env::var("MARKET_ID")
-        .expect("MARKET_ID is not set in .env file")
-        .parse()
-        .unwrap();
-    let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-        .expect("OPENBOOK_V1_PROGRAM_ID is not set in .env file")
-        .parse()
-        .unwrap();
     
     let rpc_client = RpcClient::new(rpc_url);
     
     let keypair = read_keypair(&key_path);
     
-    let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
+    let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
     
     println!("Initialized Market: {:?}", market);
 

@@ -13,12 +13,44 @@ pub static PROGRAM_LAYOUT_VERSIONS: [(&str, u8); 4] = [
     ("srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX", 3),  // DEX Version 3
 ];
 
-/// Represents openbook market ids associated with the market names.
+/// Represents openbook market ids, and base mints associated with the tokens.
 ///
-/// This static array contains tuples where the first element represents the market ID in string format,
-/// and the second element represents the associated market name.
-pub static MARKET_IDS_TO_NAMES: [(&str, &str); 1] =
-    [("8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6", "openbook")];
+/// This static array contains tuples where the first element represents the market ID,
+/// the second element represents the associated base mint, and the third element represents
+/// the associated token.
+pub static MARKET_IDS_TO_NAMES: [(&str, &str, &str); 6] = [
+    (
+        "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6",
+        "So11111111111111111111111111111111111111112",
+        "sol",
+    ),
+    (
+        "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6",
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "usdc",
+    ),
+    (
+        "HTHMfoxePjcXFhrV74pfCUNoWGe374ecFwiDjPGTkzHr",
+        "SLNDpmoWTVADgEdndyvWzroNL7zSi1dF9PC3xHGtPwp",
+        "slnd",
+    ),
+    (
+        "DZjbn4XC8qoHKikZqzmhemykVzmossoayV9ffbsUqxVj",
+        "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+        "ray",
+    ),
+    (
+        "BbJgE7HZMaDp5NTYvRh5jZSkQPVDTU8ubPFtpogUkEj4",
+        "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+        "eth",
+    ),
+    (
+        "CC9VYJprbxacpiS94tPJ1GyBhfvrLQbUiUSVMWvFohNW",
+        "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTGPsHuuPA5ey",
+        "mnde",
+    ),
+    // TODO: add all markets
+];
 
 /// Gets the layout version for the given program ID.
 ///
@@ -95,14 +127,19 @@ pub fn get_program_id(version: u8) -> String {
 /// use openbook::pubkey::Pubkey;
 /// use openbook::tokens_and_markets::get_market_name;
 ///
-/// let market_id = get_market_name("openbook");
+/// let market_id = get_market_name("usdc").0;
 ///
 /// assert_eq!(&market_id, "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6");
 /// ```
-pub fn get_market_name(market_name: &str) -> String {
+pub fn get_market_name(market_name: &str) -> (String, String) {
     MARKET_IDS_TO_NAMES
         .iter()
-        .find(|(_, val)| *val == market_name)
-        .map(|(id, _)| id.to_string())
-        .unwrap_or_else(|| "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".to_string())
+        .find(|(_, _, val)| *val == market_name)
+        .map(|(id, base, _)| (id.to_string(), base.to_string()))
+        .unwrap_or_else(|| {
+            (
+                "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".to_string(),
+                "So11111111111111111111111111111111111111112".to_string(),
+            )
+        })
 }
