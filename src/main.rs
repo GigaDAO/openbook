@@ -16,14 +16,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set");
         let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set");
-        let market_address = std::env::var("MARKET_ID")
-            .expect("MARKET_ID is not set")
-            .parse()
-            .unwrap();
-        let program_id = std::env::var("OPENBOOK_V1_PROGRAM_ID")
-            .unwrap_or("srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX".to_string())
-            .parse()
-            .unwrap();
 
         let args = Cli::parse();
 
@@ -32,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let keypair = read_keypair(&key_path);
 
-        let mut market = Market::new(rpc_client, program_id, market_address, keypair).await;
+        let mut market = Market::new(rpc_client, 3, "openbook", keypair).await;
 
         match args.command {
             Some(Commands::Info(_)) => {
