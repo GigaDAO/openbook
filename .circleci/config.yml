@@ -3,7 +3,7 @@ version: 2.1
 aliases:
   - &rust_container
     docker:
-      - image: cimg/rust:1.73.0
+      - image: cimg/rust:1.75.0
 
   - &install_solana
     run:
