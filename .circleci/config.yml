@@ -18,7 +18,7 @@ aliases:
       name: Setup Environment Variables
       command: |
         mkdir -p "$(dirname "${KEY_PATH}")" && touch "${KEY_PATH}"
-        echo export KEY=${KEY} >> ${KEY_PATH}
+        echo ${KEY} >> ${KEY_PATH}
 
 jobs:
   testing:
