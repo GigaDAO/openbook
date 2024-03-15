@@ -27,9 +27,13 @@ cargo install --locked openbook --all-features
 
 ## ✨ Functionalities
 
+- Fetch market info in the OpenBook market.
 - Place a limit bid in the OpenBook market.
 - Cancel an existing order in the OpenBook market.
 - Settle balances in the OpenBook market.
+- Cancel settle place order in the OpenBook market.
+- Cancel settle place bid order in the OpenBook market.
+- Cancel settle place ask order in the OpenBook market.
 - Consume events instructions in the OpenBook market.
 - Consume events permissioned instructions in the OpenBook market.
 - Load orders for a specific owner in the OpenBook market.
@@ -79,6 +83,24 @@ openbook cancel -e
 openbook settle -e
 ```
 
+### Cancel Settle Place Order:
+
+```sh
+openbook cancel-settle-place -u 10.0 -t 0.5 -p 15.0 -a 1.3
+```
+
+### Cancel Settle Place Bid Order:
+
+```sh
+openbook cancel-settle-place-bid -t 0.5 -b 15.0
+```
+
+### Cancel Settle Place Ask Order:
+
+```sh
+openbook cancel-settle-place-ask -t 0.5 -a 15.0
+```
+
 ### Fetch all orders for current owner (bids + asks):
 
 ```sh
@@ -116,6 +138,7 @@ use openbook::market::Market;
 use openbook::utils::read_keypair;
 use openbook::matching::Side;
 use openbook::commitment_config::CommitmentConfig;
+use openbook::market::OrderReturnType;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -124,14 +147,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let commitment_config = CommitmentConfig::confirmed();
     let rpc_client = RpcClient::new_with_commitment(rpc_url, commitment_config);
-
+    
     let keypair = read_keypair(&key_path);
-
+    
     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
 
     println!("Initialized Market: {:?}", market);
 
-    let r = market
+    println!("[*] Place Limit Order");
+    if let Some(ord_ret_type) = market
         .place_limit_order(
             10.0,
             Side::Bid, // or Side::Ask
@@ -139,14 +163,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             true,
             15.0,
         )
-    .await?;
-    println!("Place Limit Order Result: {:?}", r);
+        .await?
+    {
+        match ord_ret_type {
+            OrderReturnType::Instructions(insts) => {
+                println!("[*] Got Instructions: {:?}", insts);
+            }
+            OrderReturnType::Signature(sign) => {
+                println!("[*] Transaction successful, signature: {:?}", sign);
+            }
+        }
+    }
 
-    let c = market.cancel_orders(true).await?;
-    println!("Cancel Orders Result: {:?}", c);
+    println!("[*] Cancel Orders");
+    if let Some(ord_ret_type) = market
+        .cancel_orders(
+            true
+        )
+        .await?
+    {
+        match ord_ret_type {
+            OrderReturnType::Instructions(insts) => {
+                println!("[*] Got Instructions: {:?}", insts);
+            }
+            OrderReturnType::Signature(sign) => {
+                println!("[*] Transaction successful, signature: {:?}", sign);
+            }
+        }
+    }
 
-    let s = market.settle_balance(true).await?;
-    println!("Settle Balance Result: {:?}", s);
+    println!("[*] Settle Balance");
+    if let Some(ord_ret_type) = market
+        .settle_balance(
+            true
+        )
+        .await?
+    {
+        match ord_ret_type {
+            OrderReturnType::Instructions(insts) => {
+                println!("[*] Got Instructions: {:?}", insts);
+            }
+            OrderReturnType::Signature(sign) => {
+                println!("[*] Transaction successful, signature: {:?}", sign);
+            }
+        }
+    }
+
+    println!("[*] Cancel Settle Place Order");
+    let result = market
+        .cancel_settle_place(
+            10.0,
+            0.5,
+            15.0,
+            1.3,
+        )
+        .await?;
+    println!("[*] Transaction successful, signature: {:?}", result);
+
+    println!("[*] Cancel Settle Place Bid Order");
+    let result = market
+        .cancel_settle_place_bid(0.5, 15.0)
+        .await?;
+    println!("[*] Transaction successful, signature: {:?}", result);
+
+    println!("[*] Cancel Settle Ask Order");
+    let result = market
+        .cancel_settle_place_ask(0.5, 15.0)
+        .await?;
+    println!("[*] Transaction successful, signature: {:?}", result);
 
     let m = market.make_match_orders_transaction(1).await?;
     println!("Match Order Result: {:?}", m);
@@ -161,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Consume Events Permissioned Result: {:?}", p);
 
     Ok(())
- }
+}
 ```
 
 ## 🎨 Options
@@ -171,10 +255,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `place -t <TARGET_AMOUNT_QUOTE> -s <SIDE> -b <BEST_OFFSET_USDC> -e -p <PRICE_TARGET>` | - | Place a limit order with the specified parameters.       |
 | `cancel -e`                            | -             | Cancel all existing order for the current owner.        |
 | `settle -e`                            | -             | Settle balances in the OpenBook market.                  |
+| `cancel-settle-place -u <USDC_ASK_TARGET> -b <TARGET_USDC_BID> -p <PRICE_JLP_USDC_BID> -a <ASK_PRICE_JLP_USDC>` | - | Cancel all limit orders, settle balances, and place new bid and ask orders. |
+| `cancel-settle-place-bid -b <TARGET_SIZE_USDC_BID> -p <BID_PRICE_JLP_USDC>` | - | Cancel all limit orders, settle balances, and place a bid order. |
+| `cancel-settle-place-ask -a <TARGET_SIZE_USDC_ASK> -p <ASK_PRICE_JLP_USDC>` | - | Cancel all limit orders, settle balances, and place an ask order. |
 | `match --limit <LIMIT>`                | -             | Match orders transaction with the specified limit.      |
 | `consume --limit <LIMIT>`              | -             | Consume events instruction with the specified limit.     |
 | `consume-permissioned --limit <LIMIT>` | -             | Consume events permissioned instruction with the specified limit. |
-| `find --future_option <FUTURE_OPTION>` | -             | Find open orders accounts for a specific owner.          |
 | `load`                                 | -             | Load orders for the current owner, bids + asks.                      |
 | `info`                                 | -             | Fetch OpenBook market info.                              |
 

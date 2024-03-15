@@ -5,7 +5,7 @@ use crate::{
     tokens_and_markets::{get_market_name, get_program_id},
     utils::{get_unix_secs, u64_slice_to_bytes},
 };
-use log::debug;
+use log::{debug, error};
 use openbook_dex::{
     critbit::Slab,
     instruction::SelfTradeBehavior,
@@ -14,11 +14,12 @@ use openbook_dex::{
 };
 use rand::random;
 use solana_client::{client_error::ClientError, rpc_request::TokenAccountsFilter};
-use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
+use solana_program::{account_info::AccountInfo, instruction::Instruction, pubkey::Pubkey};
 use solana_rpc_client_api::config::RpcSendTransactionConfig;
 use solana_sdk::sysvar::slot_history::ProgramError;
 use solana_sdk::{
     account::Account,
+    compute_budget::ComputeBudgetInstruction,
     message::Message,
     nonce::state::Data as NonceData,
     signature::Signature,
@@ -37,6 +38,12 @@ use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[derive(Debug)]
+pub enum OrderReturnType {
+    Instructions(Vec<Instruction>),
+    Signature(Signature),
+}
 
 /// Struct representing a market with associated state and information.
 #[derive(Debug)]
@@ -288,7 +295,7 @@ impl Market {
 
         match result {
             Ok(sig) => debug!("[*] Transaction successful, signature: {:?}", sig),
-            Err(err) => debug!("[*] Transaction failed: {:?}", err),
+            Err(err) => error!("[*] Transaction failed: {:?}", err),
         };
 
         Ok(ata_address)
@@ -723,6 +730,7 @@ impl Market {
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
     /// use openbook::matching::Side;
+    /// use openbook::market::OrderReturnType;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -733,7 +741,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
     ///     let target_amount_quote = 10.0;
     ///     let side = Side::Bid; // or Side::Ask
@@ -741,15 +749,23 @@ impl Market {
     ///     let execute = true;
     ///     let target_price = 15.0;
     ///
-    ///     let result = market.place_limit_order(
+    ///     if let Some(ord_ret_type) = market.place_limit_order(
     ///         target_amount_quote,
     ///         side,
     ///         best_offset_usdc,
     ///         execute,
     ///         target_price
-    ///     ).await?;
-    ///
-    ///     println!("{:?}", result);
+    ///     ).await?
+    ///     {
+    ///         match ord_ret_type {
+    ///             OrderReturnType::Instructions(insts) => {
+    ///                 println!("[*] Got Instructions: {:?}", insts);
+    ///             }
+    ///             OrderReturnType::Signature(sign) => {
+    ///                 println!("[*] Transaction successful, signature: {:?}", sign);
+    ///             }
+    ///         }
+    ///     }
     ///
     ///     Ok(())
     /// }
@@ -761,7 +777,7 @@ impl Market {
         best_offset_usdc: f64,
         execute: bool,
         target_price: f64,
-    ) -> anyhow::Result<Option<Signature>, ClientError> {
+    ) -> anyhow::Result<Option<OrderReturnType>, ClientError> {
         // coin: base
         // pc: quote
         let base_d_factor = 10u32.pow(self.coin_decimals as u32) as f64;
@@ -841,6 +857,10 @@ impl Market {
 
         let instructions = vec![place_order_ix];
 
+        if !execute {
+            return Ok(Some(OrderReturnType::Instructions(instructions)));
+        }
+
         let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
@@ -851,12 +871,12 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        Ok(Some(
+        Ok(Some(OrderReturnType::Signature(
             self.rpc_client
                 .0
                 .send_transaction_with_config(&txn, config)
                 .await?,
-        ))
+        )))
     }
 
     /// Cancels all limit orders in the market.
@@ -879,6 +899,7 @@ impl Market {
     ///
     /// ```rust
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::OrderReturnType;
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
     ///
@@ -893,9 +914,19 @@ impl Market {
     ///
     ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
-    ///     let result = market.cancel_orders(true).await?;
-    ///
-    ///     println!("{:?}", result);
+    ///     if let Some(ord_ret_type) = market
+    ///         .cancel_orders(true)
+    ///         .await?
+    ///     {
+    ///         match ord_ret_type {
+    ///             OrderReturnType::Instructions(insts) => {
+    ///                 println!("[*] Got Instructions: {:?}", insts);
+    ///             }
+    ///             OrderReturnType::Signature(sign) => {
+    ///                 println!("[*] Transaction successful, signature: {:?}", sign);
+    ///             }
+    ///         }
+    ///     }
     ///
     ///     Ok(())
     /// }
@@ -903,7 +934,7 @@ impl Market {
     pub async fn cancel_orders(
         &self,
         execute: bool,
-    ) -> anyhow::Result<Option<Signature>, ClientError> {
+    ) -> anyhow::Result<Option<OrderReturnType>, ClientError> {
         let mut ixs = Vec::new();
 
         for oid in &self.market_info.open_bids {
@@ -938,8 +969,12 @@ impl Market {
             ixs.push(ix);
         }
 
-        if ixs.len() == 0 || !execute {
+        if ixs.len() == 0 {
             return Ok(None);
+        }
+
+        if !execute {
+            return Ok(Some(OrderReturnType::Instructions(ixs)));
         }
 
         let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
@@ -952,12 +987,12 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        Ok(Some(
+        Ok(Some(OrderReturnType::Signature(
             self.rpc_client
                 .0
                 .send_transaction_with_config(&txn, config)
                 .await?,
-        ))
+        )))
     }
 
     /// Settles the balance for a user in the market.
@@ -982,6 +1017,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::market::OrderReturnType;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -994,9 +1030,19 @@ impl Market {
     ///
     ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
     ///
-    ///     let result = market.settle_balance(true).await?;
-    ///
-    ///     println!("{:?}", result);
+    ///     if let Some(ord_ret_type) = market
+    ///         .settle_balance(true)
+    ///         .await?
+    ///     {
+    ///         match ord_ret_type {
+    ///             OrderReturnType::Instructions(insts) => {
+    ///                 println!("[*] Got Instructions: {:?}", insts);
+    ///             }
+    ///             OrderReturnType::Signature(sign) => {
+    ///                 println!("[*] Transaction successful, signature: {:?}", sign);
+    ///             }
+    ///         }
+    ///     }
     ///
     ///     Ok(())
     /// }
@@ -1004,7 +1050,7 @@ impl Market {
     pub async fn settle_balance(
         &self,
         execute: bool,
-    ) -> anyhow::Result<Option<Signature>, ClientError> {
+    ) -> anyhow::Result<Option<OrderReturnType>, ClientError> {
         let ix = openbook_dex::instruction::settle_funds(
             &self.program_id,
             &self.market_address,
@@ -1023,7 +1069,7 @@ impl Market {
         let instructions = vec![ix];
 
         if !execute {
-            return Ok(None);
+            return Ok(Some(OrderReturnType::Instructions(instructions)));
         }
 
         let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
@@ -1036,12 +1082,12 @@ impl Market {
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
-        Ok(Some(
+        Ok(Some(OrderReturnType::Signature(
             self.rpc_client
                 .0
                 .send_transaction_with_config(&txn, config)
                 .await?,
-        ))
+        )))
     }
 
     /// Creates a new transaction to match orders in the market.
@@ -1108,6 +1154,515 @@ impl Market {
             .0
             .send_transaction_with_config(&tx, config)
             .await
+    }
+
+    /// Executes a combination of canceling all limit orders, settling balance, and placing new bid and ask orders.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_size_usdc_ask` - The target size in USDC for the ask order.
+    /// * `target_size_usdc_bid` - The target size in USDC for the bid order.
+    /// * `bid_price_jlp_usdc` - The bid price in JLP/USDC.
+    /// * `ask_price_jlp_usdc` - The ask price in JLP/USDC.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::utils::read_keypair;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    ///
+    ///     let rpc_client = RpcClient::new(rpc_url);
+    ///
+    ///     let keypair = read_keypair(&key_path);
+    ///
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///
+    ///     let target_size_usdc_ask = 0.5;
+    ///     let target_size_usdc_bid = 1.0;
+    ///     let bid_price_jlp_usdc = 1.5;
+    ///     let ask_price_jlp_usdc = 2.5;
+    ///
+    ///     let result = market.cancel_settle_place(target_size_usdc_ask, target_size_usdc_bid, bid_price_jlp_usdc, ask_price_jlp_usdc).await?;
+    ///
+    ///     println!("{:?}", result);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn cancel_settle_place(
+        &mut self,
+        target_size_usdc_ask: f64,
+        target_size_usdc_bid: f64,
+        bid_price_jlp_usdc: f64,
+        ask_price_jlp_usdc: f64,
+    ) -> anyhow::Result<Option<Signature>> {
+        let mut instructions = Vec::new();
+
+        // Fetch recent prioritization fees
+        let r = self
+            .rpc_client
+            .0
+            .get_recent_prioritization_fees(&[])
+            .await?;
+        let mut max_fee = 1;
+        for f in r {
+            if f.prioritization_fee > max_fee {
+                max_fee = f.prioritization_fee;
+            }
+        }
+
+        // Set compute budget and fee instructions
+        let budget_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_000_000);
+        let fee_ix = ComputeBudgetInstruction::set_compute_unit_price(max_fee);
+        instructions.push(budget_ix);
+        instructions.push(fee_ix);
+
+        // Cancel all limit orders
+        if let Some(ord_ret_type) = self.cancel_orders(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Settle balance
+        if let Some(ord_ret_type) = self.settle_balance(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Place bid order
+        if let Some(ord_ret_type) = self
+            .place_limit_order(
+                target_size_usdc_bid,
+                Side::Bid,
+                0.,
+                false,
+                bid_price_jlp_usdc,
+            )
+            .await?
+        {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Place ask order
+        if let Some(ord_ret_type) = self
+            .place_limit_order(
+                target_size_usdc_ask,
+                Side::Ask,
+                0.,
+                false,
+                ask_price_jlp_usdc,
+            )
+            .await?
+        {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Build and send transaction
+        let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
+        let txn = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.keypair.pubkey()),
+            &[&self.keypair],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        let kp_str = self.keypair.pubkey().to_string().clone();
+        match self.rpc_client.0.send_transaction(&txn).await {
+            Ok(sign) => Ok(Some(sign)),
+            Err(err) => {
+                error!("err combo'ing: {err}, {}", kp_str);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Executes a combination of canceling all limit orders, settling balance, and placing a bid order.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_size_usdc_bid` - The target size in USDC for the bid order.
+    /// * `bid_price_jlp_usdc` - The bid price in JLP/USDC.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::utils::read_keypair;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    ///
+    ///     let rpc_client = RpcClient::new(rpc_url);
+    ///
+    ///     let keypair = read_keypair(&key_path);
+    ///
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///
+    ///     let result = market.cancel_settle_place_bid(1.5, 1.0).await?;
+    ///
+    ///     println!("{:?}", result);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn cancel_settle_place_bid(
+        &mut self,
+        target_size_usdc_bid: f64,
+        bid_price_jlp_usdc: f64,
+    ) -> anyhow::Result<Option<Signature>> {
+        let mut instructions = Vec::new();
+
+        // Fetch recent prioritization fees
+        let r = self
+            .rpc_client
+            .0
+            .get_recent_prioritization_fees(&[])
+            .await?;
+        let mut max_fee = 1;
+        for f in r {
+            if f.prioritization_fee > max_fee {
+                max_fee = f.prioritization_fee;
+            }
+        }
+
+        // Set compute budget and fee instructions
+        let budget_ix = ComputeBudgetInstruction::set_compute_unit_limit(800_000);
+        let fee_ix = ComputeBudgetInstruction::set_compute_unit_price(max_fee);
+        instructions.push(budget_ix);
+        instructions.push(fee_ix);
+
+        // Cancel all limit orders
+        if let Some(ord_ret_type) = self.cancel_orders(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Settle balance
+        if let Some(ord_ret_type) = self.settle_balance(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Place bid order
+        if let Some(ord_ret_type) = self
+            .place_limit_order(
+                target_size_usdc_bid,
+                Side::Bid,
+                0.,
+                false,
+                bid_price_jlp_usdc,
+            )
+            .await?
+        {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Build and send transaction
+        let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
+        let txn = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.keypair.pubkey()),
+            &[&self.keypair],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        let kp_str = self.keypair.pubkey().to_string().clone();
+        match self
+            .rpc_client
+            .0
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(Some(sign)),
+            Err(err) => {
+                error!("err bidding: {err}, {}", kp_str);
+                let e = err.get_transaction_error();
+                if let Some(e) = e {
+                    error!("got tx err: {e}");
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Executes a combination of canceling all limit orders, settling balance, and placing an ask order.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_size_usdc_ask` - The target size in USDC for the ask order.
+    /// * `ask_price_jlp_usdc` - The ask price in JLP/USDC.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::utils::read_keypair;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    ///
+    ///     let rpc_client = RpcClient::new(rpc_url);
+    ///
+    ///     let keypair = read_keypair(&key_path);
+    ///
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///
+    ///     let result = market.cancel_settle_place_ask(1.5, 1.0).await?;
+    ///
+    ///     println!("{:?}", result);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn cancel_settle_place_ask(
+        &mut self,
+        target_size_usdc_ask: f64,
+        ask_price_jlp_usdc: f64,
+    ) -> anyhow::Result<Option<Signature>> {
+        let mut instructions = Vec::new();
+
+        // Fetch recent prioritization fees
+        let r = self
+            .rpc_client
+            .0
+            .get_recent_prioritization_fees(&[])
+            .await?;
+
+        let mut max_fee = 1;
+        for f in r {
+            if f.prioritization_fee > max_fee {
+                max_fee = f.prioritization_fee;
+            }
+        }
+
+        // Set compute budget and fee instructions
+        let budget_ix = ComputeBudgetInstruction::set_compute_unit_limit(800_000);
+        let fee_ix = ComputeBudgetInstruction::set_compute_unit_price(max_fee);
+        instructions.push(budget_ix);
+        instructions.push(fee_ix);
+
+        // Cancel all limit orders
+        if let Some(ord_ret_type) = self.cancel_orders(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Settle balance
+        if let Some(ord_ret_type) = self.settle_balance(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Place ask order
+        if let Some(ord_ret_type) = self
+            .place_limit_order(
+                target_size_usdc_ask,
+                Side::Ask,
+                0.,
+                false,
+                ask_price_jlp_usdc,
+            )
+            .await?
+        {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Build and send transaction
+        let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
+        let txn = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.keypair.pubkey()),
+            &[&self.keypair],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        let kp_str = self.keypair.pubkey().to_string().clone();
+        match self
+            .rpc_client
+            .0
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(Some(sign)),
+            Err(err) => {
+                error!("err asking: {err}, {}", kp_str);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Executes a combination of canceling all limit orders and settling balance.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+    /// use openbook::market::Market;
+    /// use openbook::utils::read_keypair;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    ///
+    ///     let rpc_client = RpcClient::new(rpc_url);
+    ///
+    ///     let keypair = read_keypair(&key_path);
+    ///
+    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///
+    ///     let result = market.cancel_settle().await?;
+    ///
+    ///     println!("{:?}", result);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn cancel_settle(&mut self) -> anyhow::Result<Option<Signature>> {
+        let mut instructions = Vec::new();
+
+        // Fetch recent prioritization fees
+        let r = self
+            .rpc_client
+            .0
+            .get_recent_prioritization_fees(&[])
+            .await?;
+        let mut max_fee = 1;
+        for f in r {
+            if f.prioritization_fee > max_fee {
+                max_fee = f.prioritization_fee;
+            }
+        }
+
+        // Set compute budget and fee instructions
+        let budget_ix = ComputeBudgetInstruction::set_compute_unit_limit(800_000);
+        let fee_ix = ComputeBudgetInstruction::set_compute_unit_price(max_fee);
+        instructions.push(budget_ix);
+        instructions.push(fee_ix);
+
+        // Cancel all limit orders
+        if let Some(ord_ret_type) = self.cancel_orders(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Settle balance
+        if let Some(ord_ret_type) = self.settle_balance(false).await? {
+            match ord_ret_type {
+                OrderReturnType::Instructions(insts) => {
+                    instructions.extend(insts);
+                }
+                OrderReturnType::Signature(_) => {}
+            }
+        }
+
+        // Build and send transaction
+        let recent_hash = self.rpc_client.0.get_latest_blockhash().await?;
+        let txn = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.keypair.pubkey()),
+            &[&self.keypair],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        let kp_str = self.keypair.pubkey().to_string().clone();
+
+        match self
+            .rpc_client
+            .0
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(Some(sign)),
+            Err(err) => {
+                error!("err canceling: {err}\npk: {}", kp_str);
+                Ok(None)
+            }
+        }
     }
 
     /// Loads the bids from the market.

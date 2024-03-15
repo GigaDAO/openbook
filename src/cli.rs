@@ -90,6 +90,12 @@ pub enum Commands {
     Settle(Settle),
     /// Match orders transaction.
     Match(Match),
+    /// Cancel, Settle, and Place orders transaction.
+    CancelSettlePlace(CancelSettlePlace),
+    /// Cancel, Settle, and Place Bid orders transaction.
+    CancelSettlePlaceBid(CancelSettlePlaceBid),
+    /// Cancel, Settle, and Place Ask orders transaction.
+    CancelSettlePlaceAsk(CancelSettlePlaceAsk),
     /// Consume events instruction.
     Consume(Consume),
     /// Consume events permissioned instruction.
@@ -125,6 +131,56 @@ pub struct Place {
     /// Target price for the order.
     #[arg(short, long)]
     pub price_target: f64,
+}
+
+/// Represents options for executing a combination of canceling all limit orders,
+/// settling balance, and placing new bid and ask orders.
+#[cfg(feature = "cli")]
+#[derive(Args, Debug, Clone)]
+pub struct CancelSettlePlace {
+    /// The target size in USDC for the ask order.
+    #[arg(short, long)]
+    pub usdc_ask_target: f64,
+
+    /// The target size in USDC for the bid order.
+    #[arg(short, long)]
+    pub target_usdc_bid: f64,
+
+    /// The bid price in JLP/USDC.
+    #[arg(short, long)]
+    pub price_jlp_usdc_bid: f64,
+
+    /// The ask price in JLP/USDC.
+    #[arg(short, long)]
+    pub ask_price_jlp_usdc: f64,
+}
+
+/// Represents options for executing a combination of canceling all limit orders,
+/// settling balance, and placing a bid order.
+#[cfg(feature = "cli")]
+#[derive(Args, Debug, Clone)]
+pub struct CancelSettlePlaceBid {
+    /// The target size in USDC for the bid order.
+    #[arg(short, long)]
+    pub target_size_usdc_bid: f64,
+
+    /// The bid price in JLP/USDC.
+    #[arg(short, long)]
+    pub bid_price_jlp_usdc: f64,
+}
+
+/// Represents options for executing a combination of canceling all limit orders,
+/// settling balance, and placing an ask order.
+#[cfg(feature = "cli")]
+#[derive(Args, Debug, Clone)]
+pub struct CancelSettlePlaceAsk {
+    /// The target size in USDC for the ask order.
+    #[arg(short, long)]
+    pub target_size_usdc_ask: f64,
+
+    /// The ask price in JLP/USDC.
+    #[arg(short, long)]
+    pub ask_price_jlp_usdc: f64,
 }
 
 /// Represents options for cancelling an order in the OpenBook market.

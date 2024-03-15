@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         use openbook::cli::{Cli, Commands};
         use openbook::commitment_config::CommitmentConfig;
         use openbook::market::Market;
+        use openbook::market::OrderReturnType;
         use openbook::matching::Side;
         use openbook::rpc_client::RpcClient;
         use openbook::utils::read_keypair;
@@ -38,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => Side::Bid,
                 };
 
-                let result = market
+                if let Some(ord_ret_type) = market
                     .place_limit_order(
                         arg.target_amount_quote,
                         side,
@@ -46,26 +47,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         arg.execute,
                         arg.price_target,
                     )
-                    .await?;
-                println!(
-                    "[*] Transaction successful, signature: {:?}",
-                    result.unwrap()
-                );
+                    .await?
+                {
+                    match ord_ret_type {
+                        OrderReturnType::Instructions(insts) => {
+                            println!("[*] Got Instructions: {:?}", insts);
+                        }
+                        OrderReturnType::Signature(sign) => {
+                            println!("[*] Transaction successful, signature: {:?}", sign);
+                        }
+                    }
+                }
             }
             Some(Commands::Cancel(arg)) => {
-                let c = market.cancel_orders(arg.execute).await?;
-                println!("[*] Transaction successful, signature: {:?}", c);
+                if let Some(ord_ret_type) = market.cancel_orders(arg.execute).await? {
+                    match ord_ret_type {
+                        OrderReturnType::Instructions(insts) => {
+                            println!("[*] Got Instructions: {:?}", insts);
+                        }
+                        OrderReturnType::Signature(sign) => {
+                            println!("[*] Transaction successful, signature: {:?}", sign);
+                        }
+                    }
+                }
             }
             Some(Commands::Settle(arg)) => {
-                let result = market.settle_balance(arg.execute).await?;
-                println!(
-                    "[*] Transaction successful, signature: {:?}",
-                    result.unwrap()
-                );
+                if let Some(ord_ret_type) = market.settle_balance(arg.execute).await? {
+                    match ord_ret_type {
+                        OrderReturnType::Instructions(insts) => {
+                            println!("[*] Got Instructions: {:?}", insts);
+                        }
+                        OrderReturnType::Signature(sign) => {
+                            println!("[*] Transaction successful, signature: {:?}", sign);
+                        }
+                    }
+                }
             }
             Some(Commands::Match(arg)) => {
                 let m = market.make_match_orders_transaction(arg.limit).await?;
                 println!("[*] Transaction successful, signature: {:?}", m);
+            }
+            Some(Commands::CancelSettlePlace(arg)) => {
+                let result = market
+                    .cancel_settle_place(
+                        arg.usdc_ask_target,
+                        arg.target_usdc_bid,
+                        arg.price_jlp_usdc_bid,
+                        arg.ask_price_jlp_usdc,
+                    )
+                    .await?;
+                println!("[*] Transaction successful, signature: {:?}", result);
+            }
+            Some(Commands::CancelSettlePlaceBid(arg)) => {
+                let result = market
+                    .cancel_settle_place_bid(arg.target_size_usdc_bid, arg.bid_price_jlp_usdc)
+                    .await?;
+                println!("[*] Transaction successful, signature: {:?}", result);
+            }
+            Some(Commands::CancelSettlePlaceAsk(arg)) => {
+                let result = market
+                    .cancel_settle_place_ask(arg.target_size_usdc_ask, arg.ask_price_jlp_usdc)
+                    .await?;
+                println!("[*] Transaction successful, signature: {:?}", result);
             }
             Some(Commands::Consume(arg)) => {
                 let e = market
