@@ -1,44 +1,187 @@
-# Openbook v1 SDK
+# 📖 OpenBook
 
-## Job Description
-Translate OpenBook SDK from JS to Rust.
-Source repository: https://github.com/openbook-dex/openbook-ts
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/wiseaidev/openbook/tree/master.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/wiseaidev/openbook/tree/master)
+[![Crates.io](https://img.shields.io/crates/v/openbook.svg)](https://crates.io/crates/openbook)
+[![docs](https://docs.rs/openbook/badge.svg)](https://docs.rs/openbook/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Only the /packages/openbook directory needs to be translated. The rest of the packages can be imported as standard rust cargo dependencies. The swap package can be ignored (our use case only requires limit orders). Also, we do not require any of the functionality related to creating new markets, or using the crank.
+> A CLI and library for interacting with the OpenBook market on the Solana blockchain.
 
+## Table of Contents
 
-## Acceptance Criteria
-The Acceptance Criteria for this bounty is to implement the code snippet found in the README.md of the openbook package. I.e. execute the following functionalities:
+- [Installation](#-installation)
+- [Functionalities](#-functionalities)
+- [Usage](#-usage-as-cli)
+- [Usage as Dependency](#-usage-as-dep)
+- [Options](#-options)
+- [Contributing](#-contributing)
+- [License](#-license)
 
-- Load asks and bids for a target market.
-- Place new limit orders
-- View existing limit orders
-- Cancel existing limit orders
-- Retrieve fill history
-- Settle funds
+## 🚀 Installation
 
-### Suggested Approach
+To install `openbook` cli, use the following Cargo command:
 
-This job has two primary components:
-1) Serde for relevant state structures (e.g. critbit slab)
-2) Building instructions (key metas and data inputs are in instruction.js)
+```bash
+cargo install --locked openbook --all-features
+```
 
-Note that for component (1), you can just copy the structures directly from the contract source code, eg: https://github.com/openbook-dex/program/blob/master/dex/src/critbit.rs.
+## ✨ Functionalities
 
-For component (2), you can get the data structs directly from the source, and the key metas from the instructions.js… this is just one approach. You can use whatever approach is more efficient for you. 
+- Place a limit bid in the OpenBook market.
+- Cancel an existing order in the OpenBook market.
+- Settle balances in the OpenBook market.
+- Consume events instructions in the OpenBook market.
+- Consume events permissioned instructions in the OpenBook market.
+- Load orders for a specific owner in the OpenBook market.
+- Find open orders accounts for a specific owner in the OpenBook market.
 
-### Requirements
-- `rustc -V == 1.74.1`
+## Usage
 
-## A note to Bounty Hunters
+Before using the `openbook` crate or CLI, make sure to set the following environment variables:
 
-This repo has two functions:
-1) It will be used in our production code.
-2) It will be used to determine which devs have enough skill to work with GigaDAO.
+```bash
+export RPC_URL=https://api.mainnet-beta.solana.com
+export KEY_PATH=<path_to_your_key_file>
+```
 
-If you want to prove that you are a skilled Rust programmer, and thus receive paid bounty assignments, this is your 
-opportunity. ***You do not have to implement the whole SDK.*** If you submit a PR for partially complete SDK, but it proves
-your skill level, then I can assign you paid bounties. The minimum requirement all PR's is:
-1) Must have working unit tests.
-2) Must be clean and readable.
+> [!NOTE]
+> Certain RPC methods, like `getProgramAccounts`, are no longer available on `api.mainnet-beta.solana.com`. We recommend utilizing [helius.dev](https://www.helius.dev) as an alternative.
 
+## ⌨ Usage as CLI
+
+### Fetch Market Info:
+
+```sh
+openbook info
+```
+
+### Place a limit bid order:
+
+```sh
+openbook place -t 10.0 -s bid -b 0.5 -e -p 15.0
+```
+
+### Place a limit ask order:
+
+```sh
+openbook place -t 10.0 -s ask -b 0.5 -e -p 15.0
+```
+
+### Cancel all limit orders:
+
+```sh
+openbook cancel -e
+```
+
+### Settle balances:
+
+```sh
+openbook settle -e
+```
+
+### Fetch all orders for current owner (bids + asks):
+
+```sh
+openbook load
+```
+
+### Make match orders transaction:
+
+```sh
+openbook match --limit 3
+```
+
+### Make consume events instruction:
+
+```sh
+openbook consume --limit 2
+```
+
+### Make consume events permissioned instruction:
+
+```sh
+openbook consume-permissioned --limit 2
+```
+
+## 💻 Usage as Dependency
+
+```toml
+[dependencies]
+openbook = "0.0.5"
+```
+
+```rust
+use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+use openbook::market::Market;
+use openbook::utils::read_keypair;
+use openbook::matching::Side;
+use openbook::commitment_config::CommitmentConfig;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
+    let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+
+    let commitment_config = CommitmentConfig::confirmed();
+    let rpc_client = RpcClient::new_with_commitment(rpc_url, commitment_config);
+
+    let keypair = read_keypair(&key_path);
+
+    let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+
+    println!("Initialized Market: {:?}", market);
+
+    let r = market
+        .place_limit_order(
+            10.0,
+            Side::Bid, // or Side::Ask
+            0.5,
+            true,
+            15.0,
+        )
+    .await?;
+    println!("Place Limit Order Result: {:?}", r);
+
+    let c = market.cancel_orders(true).await?;
+    println!("Cancel Orders Result: {:?}", c);
+
+    let s = market.settle_balance(true).await?;
+    println!("Settle Balance Result: {:?}", s);
+
+    let m = market.make_match_orders_transaction(1).await?;
+    println!("Match Order Result: {:?}", m);
+
+    let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
+    let limit = 10;
+
+    let e = market.make_consume_events_instruction(open_orders_accounts.clone(), limit).await?;
+    println!("Consume Events Result: {:?}", e);
+
+    let p = market.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
+    println!("Consume Events Permissioned Result: {:?}", p);
+
+    Ok(())
+ }
+```
+
+## 🎨 Options
+
+| Option                                 | Default Value | Description                                              |
+|----------------------------------------|---------------|----------------------------------------------------------|
+| `place -t <TARGET_AMOUNT_QUOTE> -s <SIDE> -b <BEST_OFFSET_USDC> -e -p <PRICE_TARGET>` | - | Place a limit order with the specified parameters.       |
+| `cancel -e`                            | -             | Cancel all existing order for the current owner.        |
+| `settle -e`                            | -             | Settle balances in the OpenBook market.                  |
+| `match --limit <LIMIT>`                | -             | Match orders transaction with the specified limit.      |
+| `consume --limit <LIMIT>`              | -             | Consume events instruction with the specified limit.     |
+| `consume-permissioned --limit <LIMIT>` | -             | Consume events permissioned instruction with the specified limit. |
+| `find --future_option <FUTURE_OPTION>` | -             | Find open orders accounts for a specific owner.          |
+| `load`                                 | -             | Load orders for the current owner, bids + asks.                      |
+| `info`                                 | -             | Fetch OpenBook market info.                              |
+
+## 🤝 Contributing
+
+Contributions and feedback are welcome! If you'd like to contribute, report an issue, or suggest an enhancement, please engage with the project on [GitHub](https://github.com/wiseaidev/openbook). Your contributions help improve this CLI and library for the community.
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
