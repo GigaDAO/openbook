@@ -17,7 +17,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! openbook = "0.0.5"
+//! openbook = "0.0.6"
 //! ```
 //!
 //! 2. Use the `Market` struct to perform various operations in the OpenBook market:
