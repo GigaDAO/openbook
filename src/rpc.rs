@@ -4,7 +4,6 @@ use solana_account_decoder::UiAccountEncoding;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::commitment_config::{CommitmentConfig, CommitmentLevel};
 use anyhow::Result;
 use backon::ExponentialBuilder;
 use backon::Retryable;
@@ -97,11 +96,9 @@ impl Rpc {
         signature: &Signature,
     ) -> Result<EncodedConfirmedTransactionWithStatusMeta, ClientError> {
         let config = RpcTransactionConfig {
-            encoding: Some(UiTransactionEncoding::Base58),
+            encoding: Some(UiTransactionEncoding::Base64),
             max_supported_transaction_version: Some(0),
-            commitment: Some(CommitmentConfig {
-                commitment: CommitmentLevel::Confirmed,
-            }),
+            commitment: Some(self.inner().commitment()),
         };
 
         self.inner()
@@ -154,9 +151,7 @@ impl Rpc {
             let config = GetConfirmedSignaturesForAddress2Config {
                 before,
                 until,
-                commitment: Some(CommitmentConfig {
-                    commitment: CommitmentLevel::Confirmed,
-                }),
+                commitment: Some(self.inner().commitment()),
                 ..GetConfirmedSignaturesForAddress2Config::default()
             };
             self.inner()
@@ -214,9 +209,7 @@ impl Rpc {
                 filters,
                 account_config: RpcAccountInfoConfig {
                     encoding: Some(UiAccountEncoding::Base64),
-                    commitment: Some(CommitmentConfig {
-                        commitment: CommitmentLevel::Confirmed,
-                    }),
+                    commitment: Some(self.inner().commitment()),
                     ..RpcAccountInfoConfig::default()
                 },
                 ..RpcProgramAccountsConfig::default()
@@ -268,9 +261,7 @@ impl Rpc {
     ) -> Result<Vec<Option<Account>>, ClientError> {
         Ok((|| async {
             let config = RpcAccountInfoConfig {
-                commitment: Some(CommitmentConfig {
-                    commitment: CommitmentLevel::Confirmed,
-                }),
+                commitment: Some(self.inner().commitment()),
                 ..RpcAccountInfoConfig::default()
             };
 

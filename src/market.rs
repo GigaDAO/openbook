@@ -57,8 +57,11 @@ pub struct Market {
     /// The public key of the market.
     pub market_address: Pubkey,
 
-    /// The keypair used for signing transactions related to the market.
-    pub keypair: Keypair,
+    /// The keypair of the owner used for signing transactions related to the market.
+    pub owner: Keypair,
+
+    /// The associated token account.
+    pub ata_address: Pubkey,
 
     /// The number of decimal places for the base currency (coin) in the market.
     pub coin_decimals: u8,
@@ -119,7 +122,7 @@ impl Market {
     /// * `rpc_client` - The RPC client for interacting with the Solana blockchain.
     /// * `program_version` - The program dex version representing the market.
     /// * `market_name` - The market name.
-    /// * `keypair` - The keypair used for signing transactions.
+    /// * `owner` - The keypair of the owner used for signing transactions.
     ///
     /// # Returns
     ///
@@ -139,9 +142,9 @@ impl Market {
     ///
     ///     let rpc_client = RpcClient::new(rpc_url);
     ///
-    ///     let keypair = read_keypair(&key_path);
+    ///     let owner = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "usdc", owner).await;
     ///
     ///     println!("Initialized Market: {:?}", market);
     ///
@@ -152,13 +155,14 @@ impl Market {
         rpc_client: RpcClient,
         program_version: u8,
         market_name: &'static str,
-        keypair: Keypair,
+        owner: Keypair,
     ) -> Self {
         let quote_ata = get_market_name("usdc").1.parse().unwrap();
         let base_ata = get_market_name("sol").1.parse().unwrap();
         let orders_key = Default::default();
         let coin_vault = Default::default();
         let pc_vault = Default::default();
+        let ata_address = Default::default();
         let vault_signer_key = Default::default();
         let event_queue = Default::default();
         let request_queue = Default::default();
@@ -167,20 +171,21 @@ impl Market {
         let decoded = Default::default();
         let program_id = get_program_id(program_version).parse().unwrap();
         let market_address = get_market_name(market_name).0.parse().unwrap();
-        let open_orders = OpenOrders::new(market_address, decoded, keypair.pubkey());
+        let open_orders = OpenOrders::new(market_address, decoded, owner.pubkey());
         let mut open_orders_accounts_cache = HashMap::new();
 
         let open_orders_cache_entry = OpenOrdersCacheEntry {
             accounts: vec![open_orders],
             ts: 123456789,
         };
-        open_orders_accounts_cache.insert(keypair.pubkey(), open_orders_cache_entry);
+        open_orders_accounts_cache.insert(owner.pubkey(), open_orders_cache_entry);
 
         let mut market = Self {
             rpc_client: Rpc::new(rpc_client),
             program_id,
             market_address,
-            keypair,
+            owner,
+            ata_address,
             coin_decimals: 9,
             pc_decimals: 6,
             coin_lot_size: 1_000_000,
@@ -208,7 +213,7 @@ impl Market {
             let key = OpenOrders::make_create_account_transaction(
                 &market.rpc_client,
                 program_id,
-                &market.keypair,
+                &market.owner,
                 market_address,
             )
             .await
@@ -220,10 +225,10 @@ impl Market {
         }
 
         market.load().await.unwrap();
-        // let _ata_address = market
-        //     .find_or_create_associated_token_account(&market.keypair, &market_address)
-        //     .await
-        //     .unwrap();
+        market.ata_address = market
+            .find_or_create_associated_token_account(&market.owner, &market_address)
+            .await
+            .unwrap();
 
         market
     }
@@ -244,7 +249,7 @@ impl Market {
         wallet: &Keypair,
         mint: &Pubkey,
     ) -> Result<Pubkey, Box<dyn Error>> {
-        let ata_address = get_associated_token_address(&wallet.pubkey(), mint);
+        let ata_address = get_associated_token_address(&wallet.pubkey(), &mint);
 
         let tokens = self
             .rpc_client
@@ -256,11 +261,8 @@ impl Market {
             .await?;
 
         for token in tokens {
-            debug!("[*] Found Token: {:?}", token);
-            if token.pubkey == ata_address.to_string() {
-                debug!("[*] Found ATA: {:?}", ata_address);
-                return Ok(ata_address);
-            }
+            debug!("[*] Found ATA: {:?}", token.pubkey);
+            return Ok(token.pubkey.parse().unwrap());
         }
 
         debug!("[*] ATA not found, creating ATA");
@@ -834,7 +836,7 @@ impl Market {
             &self.market_info.bids_address,
             &self.market_info.asks_address,
             &input_ata,
-            &self.keypair.pubkey(),
+            &self.owner.pubkey(),
             &self.coin_vault,
             &self.pc_vault,
             &anchor_spl::token::ID,
@@ -867,20 +869,21 @@ impl Market {
             .0;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
-            Some(&self.keypair.pubkey()),
-            &[&self.keypair],
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
             recent_hash,
         );
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
         config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        Ok(Some(OrderReturnType::Signature(
-            self.rpc_client
-                .inner()
-                .send_transaction_with_config(&txn, config)
-                .await?,
-        )))
+        let signature = self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await?;
+
+        Ok(Some(OrderReturnType::Signature(signature)))
     }
 
     /// Cancels all limit orders in the market.
@@ -948,7 +951,7 @@ impl Market {
                 &self.market_info.bids_address,
                 &self.market_info.asks_address,
                 &self.orders_key,
-                &self.keypair.pubkey(),
+                &self.owner.pubkey(),
                 &self.event_queue,
                 Side::Bid,
                 *oid,
@@ -964,7 +967,7 @@ impl Market {
                 &self.market_info.bids_address,
                 &self.market_info.asks_address,
                 &self.orders_key,
-                &self.keypair.pubkey(),
+                &self.owner.pubkey(),
                 &self.event_queue,
                 Side::Ask,
                 *oid,
@@ -989,8 +992,8 @@ impl Market {
             .0;
         let txn = Transaction::new_signed_with_payer(
             &ixs,
-            Some(&self.keypair.pubkey()),
-            &[&self.keypair],
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
             recent_hash,
         );
 
@@ -1067,7 +1070,7 @@ impl Market {
             &self.market_address,
             &anchor_spl::token::ID,
             &self.orders_key,
-            &self.keypair.pubkey(),
+            &self.owner.pubkey(),
             &self.coin_vault,
             &self.base_ata,
             &self.pc_vault,
@@ -1091,8 +1094,8 @@ impl Market {
             .0;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
-            Some(&self.keypair.pubkey()),
-            &[&self.keypair],
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
             recent_hash,
         );
 
@@ -1150,9 +1153,7 @@ impl Market {
         &self,
         limit: u16,
     ) -> anyhow::Result<Signature, ClientError> {
-        let tx = Transaction::new_with_payer(&[], Some(&self.keypair.pubkey()));
-
-        let _match_orders_ix = openbook_dex::instruction::match_orders(
+        let ix = openbook_dex::instruction::match_orders(
             &self.program_id,
             &self.market_address,
             &self.request_queue,
@@ -1164,6 +1165,22 @@ impl Market {
             limit,
         )
         .unwrap();
+
+        let instructions = vec![ix];
+
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+
+        let tx = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
+            recent_hash,
+        );
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
@@ -1312,15 +1329,15 @@ impl Market {
             .0;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
-            Some(&self.keypair.pubkey()),
-            &[&self.keypair],
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
             recent_hash,
         );
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
         config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.keypair.pubkey().to_string().clone();
+        let kp_str = self.owner.pubkey().to_string().clone();
         match self
             .rpc_client
             .inner()
@@ -1445,15 +1462,15 @@ impl Market {
             .0;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
-            Some(&self.keypair.pubkey()),
-            &[&self.keypair],
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
             recent_hash,
         );
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
         config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.keypair.pubkey().to_string().clone();
+        let kp_str = self.owner.pubkey().to_string().clone();
         match self
             .rpc_client
             .inner()
@@ -1583,15 +1600,15 @@ impl Market {
             .0;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
-            Some(&self.keypair.pubkey()),
-            &[&self.keypair],
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
             recent_hash,
         );
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
         config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.keypair.pubkey().to_string().clone();
+        let kp_str = self.owner.pubkey().to_string().clone();
         match self
             .rpc_client
             .inner()
@@ -1688,15 +1705,15 @@ impl Market {
             .0;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
-            Some(&self.keypair.pubkey()),
-            &[&self.keypair],
+            Some(&self.owner.pubkey()),
+            &[&self.owner],
             recent_hash,
         );
 
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
         config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.keypair.pubkey().to_string().clone();
+        let kp_str = self.owner.pubkey().to_string().clone();
 
         match self
             .rpc_client
@@ -1846,9 +1863,10 @@ impl Market {
         .unwrap();
 
         let tx =
-            Transaction::new_with_payer(&[consume_events_ix.clone()], Some(&self.keypair.pubkey()));
+            Transaction::new_with_payer(&[consume_events_ix.clone()], Some(&self.owner.pubkey()));
 
         let mut config = RpcSendTransactionConfig::default();
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
         config.skip_preflight = true;
         self.rpc_client
             .inner()
@@ -1913,10 +1931,11 @@ impl Market {
 
         let tx = Transaction::new_with_payer(
             &[consume_events_permissioned_ix.clone()],
-            Some(&self.keypair.pubkey()),
+            Some(&self.owner.pubkey()),
         );
 
         let mut config = RpcSendTransactionConfig::default();
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
         config.skip_preflight = true;
         self.rpc_client
             .inner()
@@ -2087,7 +2106,7 @@ impl Market {
 
         let open_orders_accounts_for_owner = OpenOrders::find_for_market_and_owner(
             &self.rpc_client,
-            self.keypair.pubkey(),
+            self.owner.pubkey(),
             *owner_address,
             false,
         )

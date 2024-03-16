@@ -236,11 +236,7 @@ pub struct Load {}
 /// Represents options for finding open orders accounts for a specific owner in the OpenBook market.
 #[cfg(feature = "cli")]
 #[derive(Args, Debug, Clone)]
-pub struct Find {
-    /// Comming Soon: future options related to finding open orders accounts.
-    #[arg(short, long)]
-    pub future_option: String,
-}
+pub struct Find {}
 
 /// Represents options for fetching the OpenBook market info.
 #[cfg(feature = "cli")]

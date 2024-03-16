@@ -24,12 +24,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let args = Cli::parse();
 
         let commitment_config = CommitmentConfig::confirmed();
-        let rpc_client = RpcClient::new_with_commitment(rpc_url.clone(), commitment_config);
+        let rpc_client = RpcClient::new_with_commitment(rpc_url, commitment_config);
 
-        let keypair = read_keypair(&key_path);
+        let owner = read_keypair(&key_path);
 
         assert_eq!(rpc_client.commitment(), CommitmentConfig::confirmed());
-        let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+        let mut market = Market::new(rpc_client, 3, "usdc", owner).await;
 
         match args.command {
             Some(Commands::Info(_)) => {
@@ -60,7 +60,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("[*] Transaction successful, signature: {:?}", signature);
                             match market.rpc_client.fetch_transaction(&signature).await {
                                 Ok(confirmed_transaction) => {
-                                    println!("{:?}", confirmed_transaction);
                                     println_transaction(
                                         &confirmed_transaction
                                             .transaction
@@ -73,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         None,
                                     );
                                 }
-                                Err(err) => println!(
+                                Err(err) => eprintln!(
                                     "[*] Unable to get confirmed transaction details: {}",
                                     err
                                 ),
@@ -92,7 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("[*] Transaction successful, signature: {:?}", signature);
                             match market.rpc_client.fetch_transaction(&signature).await {
                                 Ok(confirmed_transaction) => {
-                                    println!("{:?}", confirmed_transaction);
                                     println_transaction(
                                         &confirmed_transaction
                                             .transaction
@@ -105,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         None,
                                     );
                                 }
-                                Err(err) => println!(
+                                Err(err) => eprintln!(
                                     "[*] Unable to get confirmed transaction details: {}",
                                     err
                                 ),
@@ -124,7 +122,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("[*] Transaction successful, signature: {:?}", signature);
                             match market.rpc_client.fetch_transaction(&signature).await {
                                 Ok(confirmed_transaction) => {
-                                    println!("{:?}", confirmed_transaction);
                                     println_transaction(
                                         &confirmed_transaction
                                             .transaction
@@ -137,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         None,
                                     );
                                 }
-                                Err(err) => println!(
+                                Err(err) => eprintln!(
                                     "[*] Unable to get confirmed transaction details: {}",
                                     err
                                 ),
@@ -165,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     Err(err) => {
-                        println!("[*] Unable to get confirmed transaction details: {}", err)
+                        eprintln!("[*] Unable to get confirmed transaction details: {}", err)
                     }
                 }
             }
@@ -199,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     Err(err) => {
-                        println!("[*] Unable to get confirmed transaction details: {}", err)
+                        eprintln!("[*] Unable to get confirmed transaction details: {}", err)
                     }
                 }
             }
@@ -228,7 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     Err(err) => {
-                        println!("[*] Unable to get confirmed transaction details: {}", err)
+                        eprintln!("[*] Unable to get confirmed transaction details: {}", err)
                     }
                 }
             }
@@ -257,7 +254,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     Err(err) => {
-                        println!("[*] Unable to get confirmed transaction details: {}", err)
+                        eprintln!("[*] Unable to get confirmed transaction details: {}", err)
                     }
                 }
             }
@@ -282,7 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     Err(err) => {
-                        println!("[*] Unable to get confirmed transaction details: {}", err)
+                        eprintln!("[*] Unable to get confirmed transaction details: {}", err)
                     }
                 }
             }
@@ -307,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     Err(err) => {
-                        println!("[*] Unable to get confirmed transaction details: {}", err)
+                        eprintln!("[*] Unable to get confirmed transaction details: {}", err)
                     }
                 }
             }
@@ -318,7 +315,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(Commands::Find(_arg)) => {
                 // Todo: Decode accounts data
                 let result = market
-                    .find_open_orders_accounts_for_owner(&market.keypair.pubkey(), 5000)
+                    .find_open_orders_accounts_for_owner(&market.owner.pubkey(), 5000)
                     .await?;
                 println!("[*] Found Open Orders Accounts: {:?}", result);
             }
