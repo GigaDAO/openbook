@@ -1,13 +1,6 @@
 //! This module contains utility functions related openbook.
 
-use crate::{account::Account, bs58, keypair::Keypair, rpc_client::RpcClient};
-use log::debug;
-use solana_account_decoder::UiAccountEncoding;
-use solana_client::{
-    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
-    rpc_filter::RpcFilterType,
-};
-use solana_sdk::sysvar::slot_history::ProgramError;
+use crate::{bs58, keypair::Keypair};
 use std::{fs, time::SystemTime, time::UNIX_EPOCH};
 
 /// Converts a slice of `u64` values into a fixed-size byte array.
@@ -85,83 +78,4 @@ pub fn get_unix_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
-}
-
-/// Helper function for getting filtered program accounts based on specified filters.
-///
-/// # Arguments
-///
-/// * `connection` - The RPC client for interacting with the Solana blockchain.
-/// * `program_id` - The program ID associated with the accounts.
-/// * `filters` - List of filters to apply for querying accounts.
-///
-/// # Returns
-///
-/// A `Result` containing a vector of `Account` instances or a `ProgramError`.
-///
-/// # Examples
-///
-/// ```rust
-/// use openbook::utils::get_filtered_program_accounts;
-/// use openbook::rpc_filter::RpcFilterType;
-/// use openbook::rpc_filter::MemcmpEncoding;
-/// use openbook::bs58;
-/// use openbook::rpc_filter::Memcmp;
-/// use openbook::rpc_filter::MemcmpEncodedBytes;
-/// use openbook::{pubkey::Pubkey, account::Account, rpc_client::RpcClient};
-/// use openbook::tokens_and_markets::get_market_name;
-/// use std::str::FromStr;
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set");
-///     let connection = RpcClient::new(rpc_url);
-///     let market_address: Pubkey = get_market_name("usdc").0.parse().unwrap();
-///
-///     let filters = vec![
-///         RpcFilterType::Memcmp(Memcmp {
-///             offset: 32,
-///             bytes: MemcmpEncodedBytes::Base58(bs58::encode(market_address).into_string()),
-///             encoding: Some(MemcmpEncoding::Binary),
-///         }),
-///         RpcFilterType::DataSize(165),
-///     ];
-///
-///     match get_filtered_program_accounts(&connection, filters).await {
-///         Ok(accounts) => println!("Filtered accounts: {:?}", accounts),
-///         Err(err) => eprintln!("Error getting filtered accounts: {:?}", err),
-///     }
-///     Ok(())
-/// }
-/// ```
-pub async fn get_filtered_program_accounts(
-    connection: &RpcClient,
-    filters: Vec<RpcFilterType>,
-) -> Result<Vec<Account>, ProgramError> {
-    let config = RpcProgramAccountsConfig {
-        filters: Some(filters),
-        account_config: RpcAccountInfoConfig {
-            encoding: Some(UiAccountEncoding::Base64),
-            commitment: Some(connection.commitment()),
-            ..RpcAccountInfoConfig::default()
-        },
-        with_context: Some(false),
-    };
-    // Error 410: Resource No Longer Available
-    // The occurrence of this error is attributed to the high cost of the
-    // `get_program_accounts_with_config` call on the mainnet-beta network. As a result,
-    // consider utilizing the Helius network as an alternative to mitigate this issue.
-    let accounts = connection
-        .get_program_accounts_with_config(&anchor_spl::token::ID, config)
-        .await
-        .unwrap();
-
-    let mut result = Vec::new();
-
-    for (i, account) in accounts.iter().enumerate() {
-        debug!("\n[*] ATA {:?}:  {:?}\n", i, account);
-        result.push(account.1.clone());
-    }
-
-    Ok(result)
 }

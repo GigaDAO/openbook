@@ -1,10 +1,7 @@
 //! This module contains structs and functions related to open orders on the Solana blockchain.
 
 #![allow(dead_code, deprecated)]
-use crate::{
-    rpc_client::RpcClient, tokens_and_markets::get_layout_version,
-    utils::get_filtered_program_accounts,
-};
+use crate::{rpc::Rpc, tokens_and_markets::get_layout_version};
 use borsh::{BorshDeserialize, BorshSerialize};
 use log::debug;
 use memoffset::offset_of;
@@ -153,7 +150,7 @@ impl OpenOrders {
     ///
     /// Returns a `Box<dyn Error>` if there is an error during the RPC call or deserialization.
     pub async fn find_for_owner(
-        connection: &RpcClient,
+        connection: &Rpc,
         owner_address: Pubkey,
         program_id: Pubkey,
     ) -> Result<Vec<Self>, Box<dyn Error>> {
@@ -167,11 +164,13 @@ impl OpenOrders {
             RpcFilterType::DataSize(OpenOrders::get_layout(program_id) as u64),
         ];
 
-        let accounts = get_filtered_program_accounts(connection, filters).await?;
+        let accounts = connection
+            .fetch_program_accounts(&anchor_spl::token::ID, Some(filters))
+            .await?;
 
         let open_orders_result: Result<Vec<_>, _> = accounts
             .into_iter()
-            .map(|account| OpenOrders::from_account_info(account.clone(), program_id))
+            .map(|account| OpenOrders::from_account_info(account.1.clone(), program_id))
             .collect();
 
         open_orders_result
@@ -200,12 +199,12 @@ impl OpenOrders {
     /// Returns a `Box<dyn Error>` if there is an error during the RPC call, deserialization, or
     /// ownership check.
     pub async fn find_for_market_and_owner(
-        connection: &RpcClient,
+        connection: &Rpc,
         market_address: Pubkey,
         owner_address: Pubkey,
         force_seed_account: bool,
-    ) -> Result<Vec<Account>, Box<dyn Error>> {
-        let _account_info = connection.get_account(&owner_address).await?;
+    ) -> Result<Vec<(Pubkey, Account)>, Box<dyn Error>> {
+        let _account_info = connection.inner().get_account(&owner_address).await?;
 
         if force_seed_account {
             return Ok(vec![]);
@@ -227,12 +226,14 @@ impl OpenOrders {
             }),
             RpcFilterType::DataSize(165),
         ];
-        let accounts = get_filtered_program_accounts(connection, filters).await?;
+        let accounts = connection
+            .fetch_program_accounts(&anchor_spl::token::ID, Some(filters))
+            .await?;
 
         let _open_orders_result: Result<Vec<_>, _> = accounts
             .clone()
             .into_iter()
-            .map(|account| account.deserialize_data::<NonceData>())
+            .map(|account| account.1.deserialize_data::<NonceData>())
             .collect();
 
         Ok(accounts)
@@ -254,11 +255,11 @@ impl OpenOrders {
     ///
     /// Returns a `Box<dyn Error>` if there is an error during the RPC call or deserialization.
     pub async fn load(
-        connection: &RpcClient,
+        connection: &Rpc,
         address: Pubkey,
         program_id: Pubkey,
     ) -> Result<Self, Box<dyn Error>> {
-        let account = connection.get_account(&address).await?;
+        let account = connection.inner().get_account(&address).await?;
         OpenOrders::from_account_info(account, program_id)
     }
 
@@ -341,13 +342,14 @@ impl OpenOrders {
     ///
     /// Returns a `Box<dyn Error>` if there is an error during the RPC call or transaction creation.
     pub async fn make_create_account_transaction(
-        connection: &RpcClient,
+        connection: &Rpc,
         program_id: Pubkey,
         keypair: &Keypair,
         market_account: Pubkey,
     ) -> Result<Pubkey, Box<dyn Error>> {
         let new_account_address = Keypair::new();
         let minimum_balance = connection
+            .inner()
             .get_minimum_balance_for_rent_exemption(OpenOrders::get_layout(program_id))
             .await?;
         let space: u64 = OpenOrders::get_layout(program_id).try_into().unwrap();
@@ -388,6 +390,7 @@ impl OpenOrders {
 
         let mut instructions = Vec::new();
         let r = connection
+            .inner()
             .get_recent_prioritization_fees(&[])
             .await
             .unwrap();
@@ -408,7 +411,7 @@ impl OpenOrders {
 
         debug!("Using Pubkey: {}", &keypair.pubkey().to_string());
 
-        let recent_hash = connection.get_latest_blockhash().await?;
+        let recent_hash = connection.inner().get_latest_blockhash().await?;
         let txn = Transaction::new_signed_with_payer(
             &instructions,
             Some(&keypair.pubkey()),
@@ -419,7 +422,10 @@ impl OpenOrders {
         let mut config = RpcSendTransactionConfig::default();
         config.skip_preflight = true;
 
-        let result = connection.send_transaction_with_config(&txn, config).await;
+        let result = connection
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await;
 
         match result {
             Ok(sig) => debug!("Transaction successful, signature: {:?}", sig),

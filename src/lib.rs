@@ -169,12 +169,14 @@ pub mod cli;
 pub mod fees;
 pub mod market;
 pub mod orders;
+pub mod rpc;
 pub mod tokens_and_markets;
 pub mod utils;
 
 // Re-export common func
 pub use openbook_dex::matching;
 pub use openbook_dex::state;
+pub use solana_client::rpc_config;
 pub use solana_client::rpc_filter;
 pub use solana_program::pubkey;
 pub use solana_rpc_client::nonblocking::rpc_client;
