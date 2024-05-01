@@ -135,7 +135,7 @@ openbook consume-permissioned --limit 2
 
 ```toml
 [dependencies]
-openbook = "0.0.8"
+openbook = "0.0.9"
 ```
 
 ```rust
