@@ -18,7 +18,7 @@ pub static PROGRAM_LAYOUT_VERSIONS: [(&str, u8); 4] = [
 /// This static array contains tuples where the first element represents the market ID,
 /// the second element represents the associated base mint, and the third element represents
 /// the associated token.
-pub static MARKET_IDS_TO_NAMES: [(&str, &str, &str); 6] = [
+pub static MARKET_IDS_TO_NAMES: [(&str, &str, &str); 7] = [
     (
         "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6",
         "So11111111111111111111111111111111111111112",
@@ -48,6 +48,11 @@ pub static MARKET_IDS_TO_NAMES: [(&str, &str, &str); 6] = [
         "CC9VYJprbxacpiS94tPJ1GyBhfvrLQbUiUSVMWvFohNW",
         "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTGPsHuuPA5ey",
         "mnde",
+    ),
+    (
+        "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR",
+        "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",
+        "jlp",
     ),
     // TODO: add all markets
 ];

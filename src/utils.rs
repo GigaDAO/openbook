@@ -49,15 +49,20 @@ pub fn u64_slice_to_bytes(array: [u64; 4]) -> [u8; 32] {
 /// // let keypair = read_keypair(&path);
 /// ```
 pub fn read_keypair(path: &String) -> Keypair {
-    let secret_string: String = fs::read_to_string(path).expect("Can't find key file");
-    let secret_bytes: Vec<u8> = match serde_json::from_str(&secret_string) {
-        Ok(bytes) => bytes,
-        Err(_) => match bs58::decode(&secret_string.trim()).into_vec() {
+    let secret_string: String = fs::read_to_string(path).unwrap_or_default();
+    let mut keypair = Keypair::new();
+    if !secret_string.is_empty() {
+        let secret_bytes: Vec<u8> = match serde_json::from_str(&secret_string) {
             Ok(bytes) => bytes,
-            Err(_) => panic!("failed to load secret key from file"),
-        },
-    };
-    Keypair::from_bytes(&secret_bytes).expect("failed to generate keypair from secret bytes")
+            Err(_) => match bs58::decode(&secret_string.trim()).into_vec() {
+                Ok(bytes) => bytes,
+                Err(_) => panic!("failed to load secret key from file"),
+            },
+        };
+        keypair = Keypair::from_bytes(&secret_bytes)
+            .expect("failed to generate keypair from secret bytes");
+    }
+    keypair
 }
 
 /// Gets the current UNIX timestamp in seconds.

@@ -41,7 +41,7 @@ cargo install --locked openbook --all-features
 
 ## Usage
 
-Before using the `openbook` crate or CLI, make sure to set the following environment variables:
+Before using the `openbook` crate or CLI ot TUI, make sure to set the following environment variables:
 
 ```bash
 export RPC_URL=https://api.mainnet-beta.solana.com
@@ -50,6 +50,12 @@ export KEY_PATH=<path_to_your_key_file>
 
 > [!NOTE]
 > Certain RPC methods, like `getProgramAccounts`, are no longer available on `api.mainnet-beta.solana.com`. We recommend utilizing [helius.dev](https://www.helius.dev) as an alternative.
+
+## ⌨ Usage as TUI
+
+```sh
+openbook tui
+```
 
 ## ⌨ Usage as CLI
 
@@ -263,6 +269,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `consume-permissioned --limit <LIMIT>` | -             | Consume events permissioned instruction with the specified limit. |
 | `load`                                 | -             | Load orders for the current owner, bids + asks.                      |
 | `info`                                 | -             | Fetch OpenBook market info.                              |
+| `tui`                                 | -             | launch tui.                              |
 
 ## 🤝 Contributing
 

@@ -3,7 +3,6 @@
 #![allow(dead_code, deprecated)]
 use crate::{rpc::Rpc, tokens_and_markets::get_layout_version};
 use borsh::{BorshDeserialize, BorshSerialize};
-use log::debug;
 use memoffset::offset_of;
 use solana_client::{
     rpc_config::RpcSendTransactionConfig,
@@ -348,9 +347,10 @@ impl OpenOrders {
         market_account: Pubkey,
     ) -> Result<Pubkey, Box<dyn Error>> {
         let new_account_address = Keypair::new();
+        let space = 0;
         let minimum_balance = connection
             .inner()
-            .get_minimum_balance_for_rent_exemption(OpenOrders::get_layout(program_id))
+            .get_minimum_balance_for_rent_exemption(space)
             .await?;
         let space: u64 = OpenOrders::get_layout(program_id).try_into().unwrap();
 
@@ -373,8 +373,8 @@ impl OpenOrders {
             &keypair.pubkey(),
             &new_account_address.pubkey(),
             minimum_balance,
-            space + 12,
-            &program_id,
+            space,
+            &keypair.pubkey(),
         );
         let init_ix = openbook_dex::instruction::init_open_orders(
             &program_id,
@@ -383,7 +383,7 @@ impl OpenOrders {
             &market_account,
             None,
         )?;
-        debug!(
+        println!(
             "Got New Account Address: {:?}",
             new_account_address.pubkey()
         );
@@ -409,7 +409,7 @@ impl OpenOrders {
         instructions.push(instruction);
         instructions.push(init_ix);
 
-        debug!("Using Pubkey: {}", &keypair.pubkey().to_string());
+        println!("Using Pubkey: {}", &keypair.pubkey().to_string());
 
         let recent_hash = connection.inner().get_latest_blockhash().await?;
         let txn = Transaction::new_signed_with_payer(
@@ -428,8 +428,8 @@ impl OpenOrders {
             .await;
 
         match result {
-            Ok(sig) => debug!("Transaction successful, signature: {:?}", sig),
-            Err(err) => debug!("Transaction failed: {:?}", err),
+            Ok(sig) => println!("Transaction successful, signature: {:?}", sig),
+            Err(err) => println!("Transaction failed: {:?}", err),
         };
 
         Ok(new_account_address.pubkey())

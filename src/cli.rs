@@ -80,7 +80,7 @@ pub struct Cli {
 
 /// Represents OpenBook-related subcommands.
 #[cfg(feature = "cli")]
-#[derive(Subcommand, Debug, Clone)]
+#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum Commands {
     /// Place a limit order.
     Place(Place),
@@ -106,11 +106,13 @@ pub enum Commands {
     Find(Find),
     /// Fetch Market Info.
     Info(Info),
+    /// Open up a tui.
+    Tui,
 }
 
 /// Represents options for placing a limit order in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Place {
     /// Target amount in quote currency.
     #[arg(short, long)]
@@ -136,7 +138,7 @@ pub struct Place {
 /// Represents options for executing a combination of canceling all limit orders,
 /// settling balance, and placing new bid and ask orders.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct CancelSettlePlace {
     /// The target size in USDC for the ask order.
     #[arg(short, long)]
@@ -158,7 +160,7 @@ pub struct CancelSettlePlace {
 /// Represents options for executing a combination of canceling all limit orders,
 /// settling balance, and placing a bid order.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct CancelSettlePlaceBid {
     /// The target size in USDC for the bid order.
     #[arg(short, long)]
@@ -172,7 +174,7 @@ pub struct CancelSettlePlaceBid {
 /// Represents options for executing a combination of canceling all limit orders,
 /// settling balance, and placing an ask order.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct CancelSettlePlaceAsk {
     /// The target size in USDC for the ask order.
     #[arg(short, long)]
@@ -185,7 +187,7 @@ pub struct CancelSettlePlaceAsk {
 
 /// Represents options for cancelling an order in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Cancel {
     /// Flag indicating whether to execute the order immediately.
     #[arg(short, long)]
@@ -194,7 +196,7 @@ pub struct Cancel {
 
 /// Represents options for settling balances in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Settle {
     /// Flag indicating whether to execute the order immediately.
     #[arg(short, long)]
@@ -203,7 +205,7 @@ pub struct Settle {
 
 /// Represents options for match orders transactions in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Match {
     /// The maximum number of orders to match.
     #[arg(short, long)]
@@ -212,7 +214,7 @@ pub struct Match {
 
 /// Represents options for consume events instructions in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Consume {
     /// Limit for consume events instruction.
     #[arg(short, long)]
@@ -221,7 +223,7 @@ pub struct Consume {
 
 /// Represents options for consume events permissioned instructions in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct ConsumePermissioned {
     /// Limit for consume events permissioned instruction.
     #[arg(short, long)]
@@ -230,15 +232,15 @@ pub struct ConsumePermissioned {
 
 /// Represents options for loading orders for the current owner in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Load {}
 
 /// Represents options for finding open orders accounts for a specific owner in the OpenBook market.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Find {}
 
 /// Represents options for fetching the OpenBook market info.
 #[cfg(feature = "cli")]
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, PartialEq)]
 pub struct Info {}

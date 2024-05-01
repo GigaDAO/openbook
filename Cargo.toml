@@ -35,9 +35,14 @@ clap = { version = "4.5.1", features = ["derive"] , optional = true  }
 solana-cli-output = { version = "1.18.6" , optional = true  }
 solana-transaction-status = "1.18.6"
 backon = "0.4.3"
+ratatui = { version = "0.26.2", features = ["crossterm"], optional = true }
+tui-input = { version = "0.8.0", optional = true }
+serde = { version = "1.0.200", features = ["derive"], optional = true }
+crossterm = { version = "0.27.0", optional = true }
+unicode-width = { version = "0.1.12", optional = true }
 
 [features]
-cli = ["clap", "solana-cli-output"]
+cli = ["clap", "solana-cli-output", "ratatui", "tui-input", "serde", "crossterm", "unicode-width"]
 
 [dev-dependencies]
 bump2version = "0.1.3"

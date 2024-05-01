@@ -6,12 +6,13 @@ use crate::{
     tokens_and_markets::{get_market_name, get_program_id},
     utils::{get_unix_secs, u64_slice_to_bytes},
 };
+use anchor_spl::token::spl_token;
 use log::{debug, error};
 use openbook_dex::{
     critbit::Slab,
     instruction::SelfTradeBehavior,
     matching::{OrderType, Side},
-    state::MarketState,
+    state::{gen_vault_signer_key, MarketState},
 };
 use rand::random;
 use solana_client::{client_error::ClientError, rpc_request::TokenAccountsFilter};
@@ -22,7 +23,6 @@ use solana_sdk::{
     account::Account,
     compute_budget::ComputeBudgetInstruction,
     message::Message,
-    nonce::state::Data as NonceData,
     signature::Signature,
     signature::{Keypair, Signer},
     transaction::Transaction,
@@ -154,15 +154,17 @@ impl Market {
     pub async fn new(
         rpc_client: RpcClient,
         program_version: u8,
-        market_name: &'static str,
+        base_mint: &'static str,
+        quote_mint: &'static str,
         owner: Keypair,
+        load: bool,
     ) -> Self {
-        let quote_ata = get_market_name("usdc").1.parse().unwrap();
-        let base_ata = get_market_name("sol").1.parse().unwrap();
+        let quote_ata = get_market_name(quote_mint).1.parse().unwrap();
+        let base_ata = get_market_name(base_mint).1.parse().unwrap();
+        let ata_address = get_market_name(base_mint).1.parse().unwrap();
         let orders_key = Default::default();
         let coin_vault = Default::default();
         let pc_vault = Default::default();
-        let ata_address = Default::default();
         let vault_signer_key = Default::default();
         let event_queue = Default::default();
         let request_queue = Default::default();
@@ -170,7 +172,7 @@ impl Market {
 
         let decoded = Default::default();
         let program_id = get_program_id(program_version).parse().unwrap();
-        let market_address = get_market_name(market_name).0.parse().unwrap();
+        let market_address = get_market_name(base_mint).0.parse().unwrap();
         let open_orders = OpenOrders::new(market_address, decoded, owner.pubkey());
         let mut open_orders_accounts_cache = HashMap::new();
 
@@ -205,30 +207,43 @@ impl Market {
 
         let oos_key_str = std::env::var("OOS_KEY").unwrap_or("".to_string());
 
-        let orders_key = Pubkey::from_str(oos_key_str.as_str());
+        let _orders_key = Pubkey::from_str(oos_key_str.as_str());
 
-        if orders_key.is_err() {
-            debug!("[*] Orders Key not found, creating Orders Key...");
+        // Todo: generate key
+        // if orders_key.is_err() {
+        //     println!("[*] Orders Key not found, creating Orders Key...");
 
-            let key = OpenOrders::make_create_account_transaction(
-                &market.rpc_client,
-                program_id,
-                &market.owner,
-                market_address,
-            )
-            .await
-            .unwrap();
-            debug!("[*] Orders Key created successfully!");
-            market.orders_key = key;
-        } else {
-            market.orders_key = orders_key.unwrap();
+        //     let key = OpenOrders::make_create_account_transaction(
+        //         &market.rpc_client,
+        //         program_id,
+        //         &market.owner,
+        //         market_address,
+        //     )
+        //     .await
+        //     .unwrap();
+        //     println!("[*] Orders Key created successfully!");
+        //     market.orders_key = key;
+        // } else {
+        //     market.orders_key = orders_key.unwrap();
+        // }
+        // market.orders_key = orders_key.unwrap();
+
+        if load {
+            market.load().await.unwrap();
         }
-
-        market.load().await.unwrap();
-        market.ata_address = market
-            .find_or_create_associated_token_account(&market.owner, &market_address)
-            .await
-            .unwrap();
+        // market.quote_ata = get_associated_token_address(&market.owner.pubkey(), &anchor_spl::token::ID);
+        // market.ata_address = get_associated_token_address(&market.owner.pubkey(), &anchor_spl::token::ID);
+        let (_, vault_signer_key) = {
+            let mut i = 0;
+            loop {
+                assert!(i < 100);
+                if let Ok(pk) = gen_vault_signer_key(i, &market_address, &program_id) {
+                    break (i, pk);
+                }
+                i += 1;
+            }
+        };
+        market.vault_signer_key = vault_signer_key;
 
         market
     }
@@ -281,6 +296,7 @@ impl Market {
             .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
             .await?
             .0;
+
         transaction.sign(&[wallet], recent_blockhash);
 
         let result = self
@@ -362,8 +378,6 @@ impl Market {
         &'a mut self,
         account_info: &'a AccountInfo<'_>,
     ) -> anyhow::Result<RefMut<MarketState>> {
-        let account_data = account_info.deserialize_data::<NonceData>()?;
-        debug!("[*] Account Data: {:?}", account_data);
         let mut market_state = MarketState::load(account_info, &self.program_id, false)?;
 
         {
@@ -783,7 +797,7 @@ impl Market {
         let base_d_factor = 10u32.pow(self.coin_decimals as u32) as f64;
         let quote_d_factor = 10u32.pow(self.pc_decimals as u32) as f64;
         let base_lot_factor = self.coin_lot_size as f64;
-        let quote_lot_factor = 10u32.pow(self.pc_lot_size as u32) as f64;
+        let quote_lot_factor = self.pc_lot_size as f64;
 
         let price_factor = quote_d_factor * base_lot_factor / base_d_factor / quote_lot_factor;
 
@@ -839,7 +853,7 @@ impl Market {
             &self.owner.pubkey(),
             &self.coin_vault,
             &self.pc_vault,
-            &anchor_spl::token::ID,
+            &spl_token::ID,
             &solana_program::sysvar::rent::ID,
             None,
             &self.program_id,
@@ -875,7 +889,7 @@ impl Market {
         );
 
         let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
+        config.skip_preflight = false;
         config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
         let signature = self
             .rpc_client

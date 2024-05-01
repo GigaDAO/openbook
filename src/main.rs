@@ -15,13 +15,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         use openbook::matching::Side;
         use openbook::rpc_client::RpcClient;
         use openbook::signature::Signer;
+        use openbook::tui::run_tui;
         use openbook::utils::read_keypair;
         use solana_cli_output::display::println_transaction;
 
-        let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set");
-        let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set");
-
         let args = Cli::parse();
+        let mut market;
+
+        let rpc_url = std::env::var("RPC_URL").unwrap_or("".to_string());
+        let key_path = std::env::var("KEY_PATH").unwrap_or("".to_string());
 
         let commitment_config = CommitmentConfig::confirmed();
         let rpc_client = RpcClient::new_with_commitment(rpc_url, commitment_config);
@@ -29,7 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let owner = read_keypair(&key_path);
 
         assert_eq!(rpc_client.commitment(), CommitmentConfig::confirmed());
-        let mut market = Market::new(rpc_client, 3, "usdc", owner).await;
+        if args.command == Some(Commands::Tui) {
+            market = Market::new(rpc_client, 3, "jlp", "usdc", owner, false).await;
+        } else {
+            market = Market::new(rpc_client, 3, "jlp", "usdc", owner, true).await;
+        }
 
         match args.command {
             Some(Commands::Info(_)) => {
@@ -318,6 +324,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .find_open_orders_accounts_for_owner(&market.owner.pubkey(), 5000)
                     .await?;
                 println!("[*] Found Open Orders Accounts: {:?}", result);
+            }
+            Some(Commands::Tui) => {
+                let _ = run_tui().await;
             }
             None => println!(
                 "\x1b[1;91m{}\x1b[0m",

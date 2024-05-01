@@ -171,6 +171,8 @@ pub mod market;
 pub mod orders;
 pub mod rpc;
 pub mod tokens_and_markets;
+#[cfg(feature = "cli")]
+pub mod tui;
 pub mod utils;
 
 // Re-export common func
