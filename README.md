@@ -56,6 +56,8 @@ export KEY_PATH=<path_to_your_key_file>
 
 ## ⌨ Usage as TUI
 
+https://github.com/GigaDAO/openbook/assets/62179149/23b411ac-243c-4f89-b8a2-fcc021eb9fdd
+
 ```sh
 openbook tui
 ```
