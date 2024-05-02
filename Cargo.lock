@@ -2714,6 +2714,7 @@ dependencies = [
  "solana-sdk",
  "solana-transaction-status",
  "spl-associated-token-account",
+ "strum",
  "tokio",
  "tui-input",
  "unicode-width",

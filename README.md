@@ -1,11 +1,14 @@
 # 📖 OpenBook
 
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/wiseaidev/openbook/tree/master.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/wiseaidev/openbook/tree/master)
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/gigadao/openbook/tree/master.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/gigadao/openbook/tree/master)
 [![Crates.io](https://img.shields.io/crates/v/openbook.svg)](https://crates.io/crates/openbook)
 [![docs](https://docs.rs/openbook/badge.svg)](https://docs.rs/openbook/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> A CLI and library for interacting with the OpenBook market on the Solana blockchain.
+📖 A CLI, TUI and SDK to interact with the OpenBook market on the Solana blockchain.
+
+> [!WARNING]  
+> The current release is not yet production-ready. This project is still undergoing active development.
 
 ## Table of Contents
 
@@ -56,6 +59,13 @@ export KEY_PATH=<path_to_your_key_file>
 ```sh
 openbook tui
 ```
+
+> [!NOTE]
+> To interact with the openbook market by placing bids or asking, you'll need to set up an open order account for your wallet. In future releases, this crate will automatically fetch your associated open order account. However, for now, if you already have one, you'll need to set up this environment variable before launching the tui:
+
+    ```bash
+    export OOS_KEY=<your_associated_oo_sol_account>
+    ```
 
 ## ⌨ Usage as CLI
 
@@ -156,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let keypair = read_keypair(&key_path);
     
-    let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
 
     println!("Initialized Market: {:?}", market);
 
@@ -273,7 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 🤝 Contributing
 
-Contributions and feedback are welcome! If you'd like to contribute, report an issue, or suggest an enhancement, please engage with the project on [GitHub](https://github.com/wiseaidev/openbook). Your contributions help improve this CLI and library for the community.
+Contributions and feedback are welcome! If you'd like to contribute, report an issue, or suggest an enhancement, please engage with the project on [GitHub](https://github.com/gigadao/openbook). Your contributions help improve this CLI and library for the community.
 
 ## 📄 License
 
