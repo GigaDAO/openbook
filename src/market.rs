@@ -35,9 +35,9 @@ use std::{
     collections::HashMap,
     error::Error,
     num::NonZeroU64,
-    str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
+use std::str::FromStr;
 
 #[derive(Debug)]
 pub enum OrderReturnType {
@@ -144,7 +144,7 @@ impl Market {
     ///
     ///     let owner = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", owner).await;
+    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", owner, true).await;
     ///
     ///     println!("Initialized Market: {:?}", market);
     ///
@@ -205,12 +205,22 @@ impl Market {
             market_info,
         };
 
-        let oos_key_str = std::env::var("OOS_KEY").unwrap_or("".to_string());
 
-        let _orders_key = Pubkey::from_str(oos_key_str.as_str());
+        let oos_key_str = std::env::var("OOS_KEY").unwrap_or("J393rZhx4VcGaRA48N21T1EZmCJuCkxfzUo8mQWoY7LS".to_string());
 
-        // Todo: generate key
-        // if orders_key.is_err() {
+        let orders_key = Pubkey::from_str(oos_key_str.as_str());
+
+        // TODO: use this method to get oos account
+        // let oo_accounts = market
+        //     .rpc_client
+        //     .inner()
+        //     .get_token_accounts_by_owner(
+        //         &market.owner.pubkey(),
+        //         TokenAccountsFilter::ProgramId(anchor_spl::token::ID),
+        //     )
+        //     .await.unwrap();
+
+        // if oo_accounts.is_empty() {
         //     println!("[*] Orders Key not found, creating Orders Key...");
 
         //     let key = OpenOrders::make_create_account_transaction(
@@ -224,15 +234,15 @@ impl Market {
         //     println!("[*] Orders Key created successfully!");
         //     market.orders_key = key;
         // } else {
-        //     market.orders_key = orders_key.unwrap();
+        //     market.orders_key = oo_accounts[0].pubkey.parse().unwrap();
         // }
-        // market.orders_key = orders_key.unwrap();
+
+        market.orders_key = orders_key.unwrap();
 
         if load {
             market.load().await.unwrap();
         }
-        // market.quote_ata = get_associated_token_address(&market.owner.pubkey(), &anchor_spl::token::ID);
-        // market.ata_address = get_associated_token_address(&market.owner.pubkey(), &anchor_spl::token::ID);
+
         let (_, vault_signer_key) = {
             let mut i = 0;
             loop {
@@ -244,6 +254,11 @@ impl Market {
             }
         };
         market.vault_signer_key = vault_signer_key;
+
+        market.base_ata =
+            get_associated_token_address(&market.owner.pubkey().clone(), &market.base_ata);
+        market.quote_ata =
+            get_associated_token_address(&market.owner.pubkey().clone(), &market.quote_ata);
 
         market
     }
@@ -264,7 +279,7 @@ impl Market {
         wallet: &Keypair,
         mint: &Pubkey,
     ) -> Result<Pubkey, Box<dyn Error>> {
-        let ata_address = get_associated_token_address(&wallet.pubkey(), &mint);
+        let ata_address = get_associated_token_address(&wallet.pubkey(), mint);
 
         let tokens = self
             .rpc_client
@@ -275,9 +290,9 @@ impl Market {
             )
             .await?;
 
-        for token in tokens {
-            debug!("[*] Found ATA: {:?}", token.pubkey);
-            return Ok(token.pubkey.parse().unwrap());
+        if !tokens.is_empty() {
+            debug!("[*] Found ATA: {:?}", tokens[0].pubkey);
+            return Ok(tokens[0].pubkey.parse().unwrap());
         }
 
         debug!("[*] ATA not found, creating ATA");
@@ -493,34 +508,29 @@ impl Market {
         let mut max_bid = 0;
         let mut open_bids = Vec::new();
         let mut open_bids_prices = Vec::new();
-        loop {
-            let node = bids.remove_max();
-            match node {
-                Some(node) => {
-                    let owner = node.owner();
-                    let bytes = u64_slice_to_bytes(owner);
-                    let owner_address = Pubkey::from(bytes);
+        let node = bids.remove_max();
+        match node {
+            Some(node) => {
+                let owner = node.owner();
+                let bytes = u64_slice_to_bytes(owner);
+                let owner_address = Pubkey::from(bytes);
 
-                    let order_id = node.order_id();
-                    let price_raw = node.price().get();
-                    let ui_price = price_raw as f64 / 1e4;
+                let order_id = node.order_id();
+                let price_raw = node.price().get();
+                let ui_price = price_raw as f64 / 1e4;
 
-                    debug!("[*] Bid: {price_raw}");
+                debug!("[*] Bid: {price_raw}");
 
-                    if max_bid == 0 {
-                        max_bid = price_raw;
-                    }
-
-                    if owner_address == self.orders_key {
-                        open_bids.push(order_id);
-                        open_bids_prices.push(ui_price);
-                    }
-
-                    break;
+                if max_bid == 0 {
+                    max_bid = price_raw;
                 }
-                None => {
-                    break;
+
+                if owner_address == self.orders_key {
+                    open_bids.push(order_id);
+                    open_bids_prices.push(ui_price);
                 }
+            }
+            None => {
             }
         }
         Ok((open_bids, open_bids_prices, max_bid))
@@ -610,7 +620,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client1, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client1, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
@@ -680,7 +690,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client1, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client1, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
@@ -755,7 +765,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let target_amount_quote = 10.0;
     ///     let side = Side::Bid; // or Side::Ask
@@ -804,7 +814,7 @@ impl Market {
         let (input_ata, price) = match side {
             Side::Bid => {
                 let mut price = self.market_info.max_bid as f64 / price_factor - best_offset_usdc;
-                if !execute {
+                if execute {
                     price = target_price;
                 }
 
@@ -812,7 +822,7 @@ impl Market {
             }
             Side::Ask => {
                 let mut price = self.market_info.min_ask as f64 / price_factor + best_offset_usdc;
-                if !execute {
+                if execute {
                     price = target_price;
                 }
 
@@ -849,7 +859,7 @@ impl Market {
             &self.event_queue,
             &self.market_info.bids_address,
             &self.market_info.asks_address,
-            &input_ata,
+            input_ata,
             &self.owner.pubkey(),
             &self.coin_vault,
             &self.pc_vault,
@@ -881,6 +891,7 @@ impl Market {
             .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
             .await?
             .0;
+
         let txn = Transaction::new_signed_with_payer(
             &instructions,
             Some(&self.owner.pubkey()),
@@ -933,7 +944,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     if let Some(ord_ret_type) = market
     ///         .cancel_orders(true)
@@ -990,7 +1001,7 @@ impl Market {
             ixs.push(ix);
         }
 
-        if ixs.len() == 0 {
+        if ixs.is_empty() {
             return Ok(None);
         }
 
@@ -1056,7 +1067,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     if let Some(ord_ret_type) = market
     ///         .settle_balance(true)
@@ -1154,7 +1165,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let result = market.make_match_orders_transaction(100).await?;
     ///
@@ -1234,7 +1245,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let target_size_usdc_ask = 0.5;
     ///     let target_size_usdc_bid = 1.0;
@@ -1393,7 +1404,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let result = market.cancel_settle_place_bid(1.5, 1.0).await?;
     ///
@@ -1530,7 +1541,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let result = market.cancel_settle_place_ask(1.5, 1.0).await?;
     ///
@@ -1659,7 +1670,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let result = market.cancel_settle().await?;
     ///
@@ -1769,7 +1780,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let result = market.load_bids()?;
     ///
@@ -1808,7 +1819,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let result = market.load_asks()?;
     ///
@@ -1849,7 +1860,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
@@ -1916,7 +1927,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
@@ -1983,7 +1994,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let result = market.load_orders_for_owner().await?;
     ///
@@ -2035,7 +2046,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///
     ///     let bids = market.market_info.clone();
     ///     let asks = market.market_info.clone();
@@ -2093,7 +2104,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
     ///     let owner_address = &Pubkey::new_from_array([0; 32]);
     ///
     ///     let result = market.find_open_orders_accounts_for_owner(&owner_address, 5000).await?;

@@ -34,10 +34,19 @@ AUTHORS:
     {author}
 "#,
     about=r#"
-📖 OPENBOOK CLI
-==============
+      ████████      
+   ██████████       
+  ████  ████        
+ ████  ████         
+████   ███████████ 
+████    ███████████
+       ███     ████
+       ██     ████ 
+      █     █████  
+        ████████   
+        █████      
 
-A command-line tool for interacting with the OpenBook market on the Solana blockchain.
+📖 A CLI, TUI and SDK to interact with the OpenBook market on the Solana blockchain.
 
 FUNCTIONALITIES:
   - Place Limit Bid: Place a limit bid in the OpenBook market.
@@ -53,11 +62,14 @@ USAGE:
   openbook [OPTIONS] <COMMAND>
 
 EXAMPLES:
+  Launch TUI:
+    openbook tui
+
   Place a bid limit order:
-    openbook place -t 10.0 -s bid -b 0.5 -e -p 15.0
+    openbook place -t 5.0 -s bid -b 5. -e -p 2.1
 
   Place a ask limit order:
-    openbook place -t 10.0 -s ask -b 0.5 -e -p 15.0
+    openbook place -t 5.0 -s ask -b 5. -e -p 2.1
 
   Cancel all limit orders:
     openbook cancel -e
@@ -65,7 +77,7 @@ EXAMPLES:
   Settle balances:
     openbook settle -e
 
-For more information, visit: github.com/wiseaidev/openbook
+For more information, visit: github.com/gigadao/openbook
 "#
 )]
 pub struct Cli {

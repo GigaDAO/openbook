@@ -11,7 +11,7 @@ async fn test_market_state_info() {
 
     let keypair = read_keypair(&key_path);
 
-    let market = Market::new(rpc_client, 3, "usdc", keypair).await;
+    let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
 
     assert_eq!(
         &market.program_id.to_string(),
@@ -19,42 +19,38 @@ async fn test_market_state_info() {
     );
     assert_eq!(
         &market.market_address.to_string(),
-        "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
+        "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
     );
     assert_eq!(
         &market.event_queue.to_string(),
-        "8CvwxZ9Db6XbLD46NZwwmVDZZRDy7eydFcAGkXKh9axa"
+        "FM1a4He7jBDBQXfbUK35xpwf6tx2DfRYAzX48AkVcNqP"
     );
     assert_eq!(
         &market.request_queue.to_string(),
-        "CPjXDcggXckEq9e4QeXUieVJBpUNpLEmpihLpg5vWjGF"
+        "7oGLtLJbcaTWQprDoYyCBTUW5n598qYRQP6KKw5DML4L"
     );
     assert_eq!(
         &market.market_info.bids_address.to_string(),
-        "5jWUncPNBMZJ3sTHKmMLszypVkoRK6bfEQMQUHweeQnh"
+        "E9jHtpUqgTF2Ln8UhmyRXRNJsGKuNMVaSVaGowk9Vvr6"
     );
     assert_eq!(
         &market.market_info.asks_address.to_string(),
-        "EaXdHx7x3mdGA38j5RSmKYSXMzAFzzUXCLNBEDXDn1d5"
+        "6Kus1PbGpDRZ8R57PG2UM5b5vmyMp9wAHsXzsFQfPzsZ"
     );
     assert_eq!(
         &market.quote_ata.to_string(),
-        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        "8onULHc8pHT7N7XnVfbkkLeU8mqEHnQbGwiBnTdVESio"
     );
     assert_eq!(
         &market.base_ata.to_string(),
-        "So11111111111111111111111111111111111111112"
+        "4P8mfc9dP7MxD5Uq9T5nxHD4GduVtCiKWYu8Nted8cXg"
     );
-
-    // Additional Details
 
     assert_eq!(market.coin_decimals, 9);
 
-    // Base Decimals
     assert_eq!(market.pc_decimals, 6);
 
-    // Base Lot Size
-    assert_eq!(market.coin_lot_size, 1000000);
+    assert_eq!(market.coin_lot_size, 100000);
 
-    assert_eq!(market.pc_lot_size, 1);
+    assert_eq!(market.pc_lot_size, 10);
 }

@@ -2,13 +2,17 @@
 name = "openbook"
 version = "0.0.9"
 edition = "2021"
-description = "📖 A CLI and library for interacting with the OpenBook market on the Solana blockchain."
+description = "📖 A CLI, TUI and SDK to interact with the OpenBook market on the Solana blockchain (WIP)."
 license = "MIT"
 keywords = ["blockchain", "cli", "solana", "dex"]
 categories = ["command-line-utilities", "web-programming", "science"]
-repository = "https://github.com/wiseaidev/openbook"
+repository = "https://github.com/gigadao/openbook"
 documentation = "https://docs.rs/openbook"
-authors = ["Mahmoud Harmouch <oss@wiseai.dev>"]
+authors = [
+	"GigaDAO Core Maintainers",
+	"Mahmoud Harmouch <oss@wiseai.dev>",
+]
+exclude = ["tests"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -40,9 +44,23 @@ tui-input = { version = "0.8.0", optional = true }
 serde = { version = "1.0.200", features = ["derive"], optional = true }
 crossterm = { version = "0.27.0", optional = true }
 unicode-width = { version = "0.1.12", optional = true }
+strum = { version = "0.26.2", optional = true }
 
 [features]
-cli = ["clap", "solana-cli-output", "ratatui", "tui-input", "serde", "crossterm", "unicode-width"]
+cli = ["clap", "solana-cli-output", "ratatui", "tui-input", "serde", "crossterm", "unicode-width", "strum"]
 
 [dev-dependencies]
 bump2version = "0.1.3"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = "thin"
+strip = "symbols"
+
+[badges]
+maintenance = { status = "actively-developed" }
