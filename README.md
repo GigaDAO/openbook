@@ -65,9 +65,9 @@ openbook tui
 > [!NOTE]
 > To interact with the openbook market by placing bids or asking, you'll need to set up an open order account for your wallet. In future releases, this crate will automatically fetch your associated open order account. However, for now, if you already have one, you'll need to set up this environment variable before launching the tui:
 
-    ```bash
-    export OOS_KEY=<your_associated_oo_sol_account>
-    ```
+```sh
+export OOS_KEY=<your_associated_oo_sol_account>
+```
 
 ## ⌨ Usage as CLI
 
@@ -147,7 +147,7 @@ openbook consume-permissioned --limit 2
 
 ```toml
 [dependencies]
-openbook = "0.0.9"
+openbook = "0.0.10"
 ```
 
 ```rust
