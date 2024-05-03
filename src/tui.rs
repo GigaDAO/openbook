@@ -19,8 +19,8 @@ use ratatui::{
 
 use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 
+use solana_sdk::signature::Signer;
 use std::collections::HashMap;
-use std::{error::Error, io};
 use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
 
@@ -30,6 +30,9 @@ use crate::market::OrderReturnType;
 use crate::matching::Side;
 use crate::rpc_client::RpcClient;
 use crate::utils::read_keypair;
+
+use crate::tokens_and_markets::{DexVersion, Token};
+use anyhow::{Error, Result};
 
 enum InputMode {
     Normal,
@@ -102,7 +105,8 @@ struct App {
     input_mode: InputMode,
     transaction_status: String,
     current_input: Option<CurrentInput>,
-    messages: HashMap<String, String>,
+    market_info: HashMap<String, String>,
+    wallet_info: HashMap<String, String>,
     market: Option<Market>,
     selected_tab: SelectedTab,
 }
@@ -119,17 +123,18 @@ impl Default for App {
             transaction_status: Default::default(),
             input_mode: InputMode::Normal,
             current_input: Some(CurrentInput::RpcUrl),
-            messages: HashMap::new(),
+            market_info: HashMap::new(),
+            wallet_info: HashMap::new(),
             market: None,
             selected_tab: Default::default(),
         }
     }
 }
 
-pub async fn run_tui() -> Result<(), Box<dyn Error>> {
+pub async fn run_tui() -> Result<(), Error> {
     // setup terminal
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
+    let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -154,7 +159,7 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
+async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(), Error> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
@@ -188,56 +193,55 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
                         assert_eq!(rpc_client.commitment(), CommitmentConfig::confirmed());
 
                         let base_mint =
-                            Box::leak(app.base_mint_input.value().to_string().into_boxed_str());
+                            Token::from_str(app.base_mint_input.value()).unwrap_or(Token::JLP);
                         let quote_mint =
-                            Box::leak(app.quote_mint_input.value().to_string().into_boxed_str());
+                            Token::from_str(app.quote_mint_input.value()).unwrap_or(Token::USDC);
 
                         if app.market.is_none() {
                             app.market = Some(
-                                Market::new(rpc_client, 3, base_mint, quote_mint, owner, true)
-                                    .await,
+                                Market::new(
+                                    rpc_client,
+                                    DexVersion::default(),
+                                    base_mint,
+                                    quote_mint,
+                                    owner,
+                                    true,
+                                )
+                                .await?,
                             );
                         }
 
                         match app.selected_tab {
                             SelectedTab::Tab1 => {
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Market Address".to_string(),
                                     app.market.as_ref().unwrap().market_address.to_string(),
                                 );
-                                app.messages.insert(
-                                    "Base ATA".to_string(),
-                                    app.market.as_ref().unwrap().base_ata.to_string(),
+                                app.market_info.insert(
+                                    "Base Mint".to_string(),
+                                    app.market.as_ref().unwrap().base_mint.to_string(),
                                 );
-                                app.messages.insert(
-                                    "Quote ATA".to_string(),
-                                    app.market.as_ref().unwrap().quote_ata.to_string(),
+                                app.market_info.insert(
+                                    "Quote Mint".to_string(),
+                                    app.market.as_ref().unwrap().quote_mint.to_string(),
                                 );
-                                app.messages.insert(
-                                    "Mint ATA".to_string(),
-                                    app.market.as_ref().unwrap().ata_address.to_string(),
-                                );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Coin Vault".to_string(),
                                     app.market.as_ref().unwrap().coin_vault.to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "PC Vault".to_string(),
                                     app.market.as_ref().unwrap().pc_vault.to_string(),
                                 );
-                                app.messages.insert(
-                                    "Vault Signer Key".to_string(),
-                                    app.market.as_ref().unwrap().vault_signer_key.to_string(),
-                                );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Event Queue".to_string(),
                                     app.market.as_ref().unwrap().event_queue.to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Request Queue".to_string(),
                                     app.market.as_ref().unwrap().request_queue.to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Asks Address".to_string(),
                                     app.market
                                         .as_ref()
@@ -246,7 +250,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
                                         .asks_address
                                         .to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Bids Address".to_string(),
                                     app.market
                                         .as_ref()
@@ -255,22 +259,75 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
                                         .bids_address
                                         .to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Coin Decimals".to_string(),
                                     app.market.as_ref().unwrap().coin_decimals.to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "PC Decimals".to_string(),
                                     app.market.as_ref().unwrap().pc_decimals.to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "Coin Lot Size".to_string(),
                                     app.market.as_ref().unwrap().coin_lot_size.to_string(),
                                 );
-                                app.messages.insert(
+                                app.market_info.insert(
                                     "PC Lot Size".to_string(),
                                     app.market.as_ref().unwrap().pc_lot_size.to_string(),
                                 );
+
+                                app.wallet_info.insert(
+                                    "Wallet Public Key".to_string(),
+                                    app.market.as_ref().unwrap().owner.pubkey().to_string(),
+                                );
+                                app.wallet_info.insert(
+                                    "Base ATA".to_string(),
+                                    app.market.as_ref().unwrap().base_ata.to_string(),
+                                );
+                                app.wallet_info.insert(
+                                    "Quote ATA".to_string(),
+                                    app.market.as_ref().unwrap().quote_ata.to_string(),
+                                );
+                                app.wallet_info.insert(
+                                    "Vault Signer Key".to_string(),
+                                    app.market.as_ref().unwrap().vault_signer_key.to_string(),
+                                );
+                                app.wallet_info.insert(
+                                    "Open Order Account".to_string(),
+                                    app.market.as_ref().unwrap().orders_key.to_string(),
+                                );
+                                app.wallet_info.insert(
+                                    "Min Ask".to_string(),
+                                    app.market.as_ref().unwrap().market_info.min_ask.to_string(),
+                                );
+                                app.wallet_info.insert(
+                                    "Max Bid".to_string(),
+                                    app.market.as_ref().unwrap().market_info.max_bid.to_string(),
+                                );
+
+                                let open_asks: String = app
+                                    .market
+                                    .as_ref()
+                                    .unwrap()
+                                    .market_info
+                                    .open_asks
+                                    .iter()
+                                    .map(|&x| x.to_string())
+                                    .collect::<Vec<String>>()
+                                    .join(", ");
+                                app.wallet_info.insert("Open Asks".to_string(), open_asks);
+
+                                let open_bids: String = app
+                                    .market
+                                    .as_ref()
+                                    .unwrap()
+                                    .market_info
+                                    .open_bids
+                                    .iter()
+                                    .map(|&x| x.to_string())
+                                    .collect::<Vec<String>>()
+                                    .join(", ");
+                                app.wallet_info.insert("Open Bids".to_string(), open_bids);
                             }
                             SelectedTab::Tab2 => {
                                 let side = match app.side_input.value() {
@@ -285,8 +342,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
                                     .as_ref()
                                     .unwrap()
                                     .place_limit_order(5.0, side, 5.0, true, price)
-                                    .await
-                                    .unwrap();
+                                    .await?;
                                 match result {
                                     Some(OrderReturnType::Signature(signature)) => {
                                         app.transaction_status = format!(
@@ -630,16 +686,28 @@ fn ui(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    let messages: Vec<ListItem> = app
-        .messages
+    let market_info: Vec<ListItem> = app
+        .market_info
         .iter()
         .map(|(key, val)| {
             let content = vec![Line::from(Span::raw(format!("{}: {}", key, val)))];
             ListItem::new(content)
         })
         .collect();
-    let messages =
-        List::new(messages).block(Block::default().borders(Borders::ALL).title("Market Info"));
+
+    let wallet_info: Vec<ListItem> = app
+        .wallet_info
+        .iter()
+        .map(|(key, val)| {
+            let content = vec![Line::from(Span::raw(format!("{}: {}", key, val)))];
+            ListItem::new(content)
+        })
+        .collect();
+    let market_info =
+        List::new(market_info).block(Block::default().borders(Borders::ALL).title("Market Info"));
+
+    let wallet_info =
+        List::new(wallet_info).block(Block::default().borders(Borders::ALL).title("Wallet Info"));
 
     let transaction_status = Paragraph::new(app.transaction_status.clone())
         .block(Block::default().borders(Borders::ALL).title("Response"));
@@ -649,7 +717,11 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
     match app.selected_tab {
         SelectedTab::Tab1 => {
-            frame.render_widget(messages, third_row_layout[0]);
+            let third_row_info_layout =
+                Layout::new(Direction::Horizontal, [Percentage(50), Percentage(50)])
+                    .split(third_row_layout[0]);
+            frame.render_widget(market_info, third_row_info_layout[0]);
+            frame.render_widget(wallet_info, third_row_info_layout[1]);
         }
         SelectedTab::Tab2 => {
             frame.render_widget(side_input, order_row_layout[0]);

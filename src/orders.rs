@@ -1,7 +1,11 @@
 //! This module contains structs and functions related to open orders on the Solana blockchain.
 
 #![allow(dead_code, deprecated)]
-use crate::{rpc::Rpc, tokens_and_markets::get_layout_version};
+use crate::{
+    rpc::Rpc,
+    tokens_and_markets::{get_layout_version, DexVersion},
+};
+use anyhow::{anyhow, Error, Result};
 use borsh::{BorshDeserialize, BorshSerialize};
 use memoffset::offset_of;
 use solana_client::{
@@ -14,7 +18,8 @@ use solana_sdk::{
     nonce::state::Data as NonceData, pubkey::Pubkey, signature::Signer, signer::keypair::Keypair,
     transaction::Transaction,
 };
-use std::{borrow::Borrow, convert::TryInto, error::Error};
+use std::{borrow::Borrow, convert::TryInto};
+use tracing::{debug, error};
 
 /// Struct representing an open orders account.
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
@@ -58,17 +63,23 @@ impl OpenOrders {
     ///
     /// # Arguments
     ///
-    /// * `address` - The public key of the open orders account.
-    /// * `decoded` - The decoded layout data of the open orders account.
-    /// * `_program_id` - The program ID associated with the open orders.
+    /// * `rpc_client` - RPC client for interacting with Solana blockchain.
+    /// * `program_id` - Program dex pub key representing the market.
+    /// * `keypair` - Keypair of the owner used for signing transactions.
+    /// * `market_address` - Market address pub key.
     ///
     /// # Returns
     ///
     /// An instance of `OpenOrders`.
-    pub fn new(address: Pubkey, decoded: OpenOrdersLayoutV1, _program_id: Pubkey) -> Self {
+    pub async fn new(
+        rpc_client: Rpc,
+        program_id: Pubkey,
+        keypair: Keypair,
+        market_address: Pubkey,
+    ) -> Result<Self, Error> {
         let OpenOrdersLayoutV1 {
             market,
-            owner,
+            owner: _,
             base_token_free,
             base_token_total,
             quote_token_free,
@@ -79,12 +90,12 @@ impl OpenOrders {
             client_ids,
             account_flags: _,
             padding: _,
-        } = decoded;
+        } = Default::default();
 
-        Self {
-            address,
+        let mut oo_account = Self {
+            address: Default::default(),
             market: market.into(),
-            owner: owner.into(),
+            owner: keypair.pubkey(),
             base_token_free,
             base_token_total,
             quote_token_free,
@@ -93,13 +104,19 @@ impl OpenOrders {
             is_bid_bits: is_bid_bits.try_into().unwrap(),
             orders: orders.into(),
             client_ids: client_ids.into(),
-        }
+        };
+
+        let _ = oo_account
+            .make_create_account_transaction(&rpc_client, program_id, &keypair, market_address)
+            .await?;
+
+        Ok(oo_account)
     }
 
     /// Returns the layout size of the `OpenOrders` struct based on the program ID.
     pub fn get_layout(program_id: Pubkey) -> usize {
         match get_layout_version(&program_id) {
-            1 => std::mem::size_of::<openbook_dex::state::OpenOrders>(),
+            DexVersion::DepDexV1 => std::mem::size_of::<openbook_dex::state::OpenOrders>(),
             _ => std::mem::size_of::<openbook_dex::state::OpenOrders>(),
         }
     }
@@ -123,7 +140,7 @@ impl OpenOrders {
         owner_address: Pubkey,
         market_address: Pubkey,
         program_id: Pubkey,
-    ) -> Result<Pubkey, Box<dyn Error>> {
+    ) -> Result<Pubkey, Error> {
         let seed = market_address
             .to_string()
             .chars()
@@ -152,7 +169,7 @@ impl OpenOrders {
         connection: &Rpc,
         owner_address: Pubkey,
         program_id: Pubkey,
-    ) -> Result<Vec<Self>, Box<dyn Error>> {
+    ) -> Result<Vec<Self>, Error> {
         let offset = offset_of!(OpenOrdersLayoutV1, owner);
         let filters = vec![
             RpcFilterType::Memcmp(Memcmp {
@@ -202,7 +219,7 @@ impl OpenOrders {
         market_address: Pubkey,
         owner_address: Pubkey,
         force_seed_account: bool,
-    ) -> Result<Vec<(Pubkey, Account)>, Box<dyn Error>> {
+    ) -> Result<Vec<(Pubkey, Account)>, Error> {
         let _account_info = connection.inner().get_account(&owner_address).await?;
 
         if force_seed_account {
@@ -257,7 +274,7 @@ impl OpenOrders {
         connection: &Rpc,
         address: Pubkey,
         program_id: Pubkey,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Error> {
         let account = connection.inner().get_account(&address).await?;
         OpenOrders::from_account_info(account, program_id)
     }
@@ -276,17 +293,14 @@ impl OpenOrders {
     /// # Errors
     ///
     /// Returns a `Box<dyn Error>` if there is an error during deserialization or ownership check.
-    pub fn from_account_info(
-        mut account_info: Account,
-        program_id: Pubkey,
-    ) -> Result<Self, Box<dyn Error>> {
+    pub fn from_account_info(mut account_info: Account, program_id: Pubkey) -> Result<Self, Error> {
         // Fix: Not all bytes read
         let data_size: usize = 165;
         account_info.data.resize(data_size, 0);
         let decoded = OpenOrdersLayoutV1::try_from_slice(account_info.data.borrow())?;
         let _account_flags = decoded.account_flags;
         if !account_info.owner.eq(&program_id) {
-            return Err("Address not owned by program".into());
+            return Err(anyhow!("Address not owned by program"));
         }
 
         // if !account_flags.initialized || !account_flags.open_orders {
@@ -341,11 +355,12 @@ impl OpenOrders {
     ///
     /// Returns a `Box<dyn Error>` if there is an error during the RPC call or transaction creation.
     pub async fn make_create_account_transaction(
+        &mut self,
         connection: &Rpc,
         program_id: Pubkey,
         keypair: &Keypair,
         market_account: Pubkey,
-    ) -> Result<Pubkey, Box<dyn Error>> {
+    ) -> Result<Pubkey, Error> {
         let new_account_address = Keypair::new();
         let space = 0;
         let minimum_balance = connection
@@ -383,8 +398,8 @@ impl OpenOrders {
             &market_account,
             None,
         )?;
-        println!(
-            "Got New Account Address: {:?}",
+        debug!(
+            "[*] Got New Account Address: {:?}",
             new_account_address.pubkey()
         );
 
@@ -409,7 +424,7 @@ impl OpenOrders {
         instructions.push(instruction);
         instructions.push(init_ix);
 
-        println!("Using Pubkey: {}", &keypair.pubkey().to_string());
+        debug!("[*] Using Pubkey: {}", &keypair.pubkey().to_string());
 
         let recent_hash = connection.inner().get_latest_blockhash().await?;
         let txn = Transaction::new_signed_with_payer(
@@ -428,9 +443,11 @@ impl OpenOrders {
             .await;
 
         match result {
-            Ok(sig) => println!("Transaction successful, signature: {:?}", sig),
-            Err(err) => println!("Transaction failed: {:?}", err),
+            Ok(sig) => debug!("[*] Transaction successful, signature: {:?}", sig),
+            Err(err) => error!("[*] Transaction failed: {:?}", err),
         };
+
+        self.address = new_account_address.pubkey();
 
         Ok(new_account_address.pubkey())
     }
@@ -571,13 +588,13 @@ impl Default for OpenOrdersLayoutV2 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OpenOrdersCacheEntry {
     pub accounts: Vec<OpenOrders>,
     pub ts: u128,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, BorshDeserialize, BorshSerialize)]
 pub struct MarketInfo {
     pub min_ask: u64,
     pub max_bid: u64,

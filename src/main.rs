@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 /// The entry point for the OpenBook CLI application.
 ///
 /// # Returns
@@ -15,14 +17,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         use openbook::matching::Side;
         use openbook::rpc_client::RpcClient;
         use openbook::signature::Signer;
+        use openbook::tokens_and_markets::{DexVersion, Token};
         use openbook::tui::run_tui;
         use openbook::utils::read_keypair;
         use solana_cli_output::display::println_transaction;
+        use tracing_subscriber::{filter, fmt};
+
+        // Start configuring a `fmt` subscriber
+        let filter = filter::LevelFilter::INFO;
+        let subscriber = fmt()
+            .compact()
+            .with_max_level(filter)
+            .with_file(false)
+            .with_line_number(false)
+            .with_thread_ids(false)
+            .with_target(false)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)?;
 
         let args = Cli::parse();
         let mut market;
 
-        let rpc_url = std::env::var("RPC_URL").unwrap_or("".to_string());
+        let rpc_url =
+            std::env::var("RPC_URL").unwrap_or("https://api.mainnet-beta.solana.com".to_string());
         let key_path = std::env::var("KEY_PATH").unwrap_or("".to_string());
 
         let commitment_config = CommitmentConfig::confirmed();
@@ -32,9 +49,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         assert_eq!(rpc_client.commitment(), CommitmentConfig::confirmed());
         if args.command == Some(Commands::Tui) {
-            market = Market::new(rpc_client, 3, "jlp", "usdc", owner, false).await;
+            market = Market::new(
+                rpc_client,
+                DexVersion::default(),
+                Token::JLP,
+                Token::USDC,
+                owner,
+                false,
+            )
+            .await?;
         } else {
-            market = Market::new(rpc_client, 3, "jlp", "usdc", owner, true).await;
+            market = Market::new(
+                rpc_client,
+                DexVersion::default(),
+                Token::JLP,
+                Token::USDC,
+                owner,
+                true,
+            )
+            .await?;
         }
 
         match args.command {

@@ -25,7 +25,7 @@ use solana_sdk::pubkey::Pubkey;
 /// assert_eq!(is_supported, true);
 /// ```
 pub fn supports_srm_fee_discounts(program_id: &Pubkey) -> bool {
-    get_layout_version(program_id) > 1
+    get_layout_version(program_id) as u64 > 0
 }
 
 /// Gets the fee rates for a given fee tier.

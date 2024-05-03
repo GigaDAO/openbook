@@ -21,6 +21,7 @@ use solana_transaction_status::{EncodedConfirmedTransactionWithStatusMeta, UiTra
 /// Wrapper type for RpcClient providing additional functionality and enabling Debug trait implementation.
 ///
 /// This struct holds an `Arc` of `RpcClient` to ensure thread safety and efficient resource sharing.
+#[derive(Clone)]
 pub struct Rpc(Arc<RpcClient>);
 
 impl Rpc {
