@@ -62,6 +62,13 @@ https://github.com/GigaDAO/openbook/assets/62179149/23b411ac-243c-4f89-b8a2-fcc0
 openbook tui
 ```
 
+> [!NOTE]
+> To trade on the openbook market, you need an open order account. This current release of this crate generates one for your wallet, but it's empty. You'll have to add funds to it. In the future, you can add funds through the TUI. But, if you already have funds in your open order account, set up this variable before starting the TUI:
+
+```sh
+export OOS_KEY=<your_associated_oo_sol_account>
+```
+
 ## ⌨ Usage as CLI
 
 ### Fetch Market Info:
