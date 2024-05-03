@@ -30,6 +30,7 @@ use spl_associated_token_account::{
     get_associated_token_address,
 };
 use std::{
+    str::FromStr,
     cell::RefMut,
     collections::HashMap,
     num::NonZeroU64,
@@ -233,6 +234,14 @@ impl Market {
             }
         };
         market.vault_signer_key = vault_signer_key;
+
+        let oos_key_str = std::env::var("OOS_KEY").unwrap_or("".to_string());
+
+        let orders_key = Pubkey::from_str(oos_key_str.as_str());
+
+        if !orders_key.is_err() {
+            market.orders_key = orders_key.unwrap();
+        }
 
         market.base_ata = get_associated_token_address(&pub_owner_key.clone(), &market.base_mint);
         market.quote_ata = get_associated_token_address(&pub_owner_key.clone(), &market.quote_mint);

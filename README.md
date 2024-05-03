@@ -144,7 +144,7 @@ openbook = "0.0.11"
 ```
 
 ```rust
-use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
+use openbook::{pubkey::Pubkey, rpc_client::RpcClient};
 use openbook::market::Market;
 use openbook::utils::read_keypair;
 use openbook::matching::Side;
@@ -169,9 +169,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[*] Place Limit Order");
     if let Some(ord_ret_type) = market
         .place_limit_order(
-            5.0,
+            0.1,
             Side::Bid, // or Side::Ask
-            5.0,
+            0.1,
             true,
             2.0,
         )
