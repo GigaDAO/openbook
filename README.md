@@ -1,9 +1,11 @@
 # 📖 OpenBook
 
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/gigadao/openbook/tree/master.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/gigadao/openbook/tree/master)
 [![Crates.io](https://img.shields.io/crates/v/openbook.svg)](https://crates.io/crates/openbook)
+[![Crates.io Downloads](https://img.shields.io/crates/d/openbook)](https://crates.io/crates/openbook)
 [![docs](https://docs.rs/openbook/badge.svg)](https://docs.rs/openbook/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+![Banner](https://github.com/GigaDAO/openbook/assets/62179149/ed83a9a8-4b8d-421d-be31-8eea73529444)
 
 📖 A CLI, TUI and SDK to interact with the OpenBook market on the Solana blockchain.
 
@@ -51,22 +53,12 @@ export RPC_URL=https://api.mainnet-beta.solana.com
 export KEY_PATH=<path_to_your_key_file>
 ```
 
-> [!NOTE]
-> Certain RPC methods, like `getProgramAccounts`, are no longer available on `api.mainnet-beta.solana.com`. We recommend utilizing [helius.dev](https://www.helius.dev) as an alternative.
-
 ## ⌨ Usage as TUI
 
 https://github.com/GigaDAO/openbook/assets/62179149/23b411ac-243c-4f89-b8a2-fcc021eb9fdd
 
 ```sh
 openbook tui
-```
-
-> [!NOTE]
-> To interact with the openbook market by placing bids or asking, you'll need to set up an open order account for your wallet. In future releases, this crate will automatically fetch your associated open order account. However, for now, if you already have one, you'll need to set up this environment variable before launching the tui:
-
-```sh
-export OOS_KEY=<your_associated_oo_sol_account>
 ```
 
 ## ⌨ Usage as CLI
@@ -157,6 +149,7 @@ use openbook::utils::read_keypair;
 use openbook::matching::Side;
 use openbook::commitment_config::CommitmentConfig;
 use openbook::market::OrderReturnType;
+use openbook::tokens_and_markets::{Token, DexVersion};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -168,18 +161,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let keypair = read_keypair(&key_path);
     
-    let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
 
     println!("Initialized Market: {:?}", market);
 
     println!("[*] Place Limit Order");
     if let Some(ord_ret_type) = market
         .place_limit_order(
-            10.0,
+            5.0,
             Side::Bid, // or Side::Ask
-            0.5,
+            5.0,
             true,
-            15.0,
+            2.0,
         )
         .await?
     {

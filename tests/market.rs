@@ -1,9 +1,10 @@
 use openbook::market::Market;
 use openbook::rpc_client::RpcClient;
+use openbook::tokens_and_markets::{DexVersion, Token};
 use openbook::utils::read_keypair;
 
 #[tokio::test]
-async fn test_market_state_info() {
+async fn test_market_state_info() -> anyhow::Result<(), anyhow::Error> {
     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
 
@@ -11,7 +12,15 @@ async fn test_market_state_info() {
 
     let keypair = read_keypair(&key_path);
 
-    let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    let market = Market::new(
+        rpc_client,
+        DexVersion::default(),
+        Token::JLP,
+        Token::USDC,
+        keypair,
+        true,
+    )
+    .await?;
 
     assert_eq!(
         &market.program_id.to_string(),
@@ -53,4 +62,6 @@ async fn test_market_state_info() {
     assert_eq!(market.coin_lot_size, 100000);
 
     assert_eq!(market.pc_lot_size, 10);
+
+    Ok(())
 }

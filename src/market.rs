@@ -3,11 +3,11 @@ use crate::{
     orders::{MarketInfo, OpenOrders, OpenOrdersCacheEntry},
     rpc::Rpc,
     rpc_client::RpcClient,
-    tokens_and_markets::{get_market_name, get_program_id},
+    tokens_and_markets::{get_market_name, get_program_id, DexVersion, Token},
     utils::{get_unix_secs, u64_slice_to_bytes},
 };
 use anchor_spl::token::spl_token;
-use log::{debug, error};
+use anyhow::{Error, Result};
 use openbook_dex::{
     critbit::Slab,
     instruction::SelfTradeBehavior,
@@ -15,29 +15,27 @@ use openbook_dex::{
     state::{gen_vault_signer_key, MarketState},
 };
 use rand::random;
-use solana_client::{client_error::ClientError, rpc_request::TokenAccountsFilter};
+use solana_client::client_error::ClientError;
 use solana_program::{account_info::AccountInfo, instruction::Instruction, pubkey::Pubkey};
 use solana_rpc_client_api::config::RpcSendTransactionConfig;
 use solana_sdk::sysvar::slot_history::ProgramError;
 use solana_sdk::{
     account::Account,
     compute_budget::ComputeBudgetInstruction,
-    message::Message,
     signature::Signature,
     signature::{Keypair, Signer},
     transaction::Transaction,
 };
 use spl_associated_token_account::{
-    get_associated_token_address, instruction::create_associated_token_account,
+    get_associated_token_address,
 };
 use std::{
     cell::RefMut,
     collections::HashMap,
-    error::Error,
     num::NonZeroU64,
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::str::FromStr;
+use tracing::{debug, error};
 
 #[derive(Debug)]
 pub enum OrderReturnType {
@@ -60,9 +58,6 @@ pub struct Market {
     /// The keypair of the owner used for signing transactions related to the market.
     pub owner: Keypair,
 
-    /// The associated token account.
-    pub ata_address: Pubkey,
-
     /// The number of decimal places for the base currency (coin) in the market.
     pub coin_decimals: u8,
 
@@ -78,11 +73,17 @@ pub struct Market {
     /// The lot size for the quote currency (pc) in the market.
     pub pc_lot_size: u64,
 
-    /// The public key of the account holding USDC tokens.
+    /// The public key of the associated account holding the quote quote tokens.
     pub quote_ata: Pubkey,
 
-    /// The public key of the base market token.
+    /// The public key of the associated account holding the base quote tokens.
     pub base_ata: Pubkey,
+
+    /// The public key of the market quote mint.
+    pub quote_mint: Pubkey,
+
+    /// The public key of the market base mint.
+    pub base_mint: Pubkey,
 
     /// The public key of the vault holding base currency (coin) tokens.
     pub coin_vault: Pubkey,
@@ -105,24 +106,26 @@ pub struct Market {
     /// A HashMap containing open orders cache entries associated with their public keys.
     pub open_orders_accounts_cache: HashMap<Pubkey, OpenOrdersCacheEntry>,
 
-    /// Information about the market.
+    /// Account info of the wallet on the market (e.g. open orders).
     pub market_info: MarketInfo,
 }
 
 impl Market {
-    /// This function is responsible for creating a new instance of the `Market` struct, representing an OpenBook market
-    /// on the Solana blockchain. It requires essential parameters such as the RPC client, program version, market name,
-    /// and a keypair for transaction signing. The example demonstrates how to set up the necessary environment variables,
-    /// initialize the RPC client, and read the keypair from a file path. After initializing the market, information about
-    /// the newly created instance is printed for verification and further usage. Ensure that the required environment variables,
-    /// such as `RPC_URL`, `KEY_PATH` are appropriately configured before executing this method.
+    /// Initializes a new instance of the `Market` struct, representing an OpenBook market on the Solana blockchain.
+    ///
+    /// This method initializes the `Market` struct, containing information about the requested market,
+    /// having the base and quote mints. It fetches and stores all data about this OpenBook market.
+    /// Additionally, it includes information about the account associated with the wallet on the OpenBook market
+    /// (e.g., open orders, bids, asks, etc.).
     ///
     /// # Arguments
     ///
-    /// * `rpc_client` - The RPC client for interacting with the Solana blockchain.
-    /// * `program_version` - The program dex version representing the market.
-    /// * `market_name` - The market name.
-    /// * `owner` - The keypair of the owner used for signing transactions.
+    /// * `rpc_client` - RPC client for interacting with Solana blockchain.
+    /// * `program_version` - Program dex version representing the market.
+    /// * `base_mint` - Base mint symbol.
+    /// * `quote_mint` - Quote mint symbol.
+    /// * `owner` - Keypair of the owner used for signing transactions.
+    /// * `load` - Boolean indicating whether to load market data immediately.
     ///
     /// # Returns
     ///
@@ -134,6 +137,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -144,7 +148,7 @@ impl Market {
     ///
     ///     let owner = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", owner, true).await;
+    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, owner, true).await?;
     ///
     ///     println!("Initialized Market: {:?}", market);
     ///
@@ -153,47 +157,54 @@ impl Market {
     /// ```
     pub async fn new(
         rpc_client: RpcClient,
-        program_version: u8,
-        base_mint: &'static str,
-        quote_mint: &'static str,
+        program_version: DexVersion,
+        base_mint: Token,
+        quote_mint: Token,
         owner: Keypair,
         load: bool,
-    ) -> Self {
-        let quote_ata = get_market_name(quote_mint).1.parse().unwrap();
-        let base_ata = get_market_name(base_mint).1.parse().unwrap();
-        let ata_address = get_market_name(base_mint).1.parse().unwrap();
+    ) -> Result<Self, Error> {
+        let market_address = get_market_name(base_mint).0.parse()?;
+        let quote_mint = get_market_name(quote_mint).1.parse()?;
+        let base_mint = get_market_name(base_mint).1.parse()?;
         let orders_key = Default::default();
         let coin_vault = Default::default();
+        let quote_ata = Default::default();
+        let base_ata = Default::default();
         let pc_vault = Default::default();
         let vault_signer_key = Default::default();
         let event_queue = Default::default();
         let request_queue = Default::default();
         let market_info = Default::default();
 
-        let decoded = Default::default();
-        let program_id = get_program_id(program_version).parse().unwrap();
-        let market_address = get_market_name(base_mint).0.parse().unwrap();
-        let open_orders = OpenOrders::new(market_address, decoded, owner.pubkey());
+        let program_id = get_program_id(program_version).parse()?;
+        let rpc_client = Rpc::new(rpc_client);
+        let pub_owner_key = owner.pubkey().clone();
+        let owner_bytes = owner.to_bytes();
+        let cloned_owner = Keypair::from_bytes(&owner_bytes)?;
+        let open_orders =
+            OpenOrders::new(rpc_client.clone(), program_id, cloned_owner, market_address).await?;
         let mut open_orders_accounts_cache = HashMap::new();
 
         let open_orders_cache_entry = OpenOrdersCacheEntry {
             accounts: vec![open_orders],
             ts: 123456789,
         };
-        open_orders_accounts_cache.insert(owner.pubkey(), open_orders_cache_entry);
+
+        open_orders_accounts_cache.insert(pub_owner_key, open_orders_cache_entry.clone());
 
         let mut market = Self {
-            rpc_client: Rpc::new(rpc_client),
+            rpc_client,
             program_id,
             market_address,
             owner,
-            ata_address,
             coin_decimals: 9,
             pc_decimals: 6,
             coin_lot_size: 1_000_000,
             pc_lot_size: 1,
             quote_ata,
             base_ata,
+            quote_mint,
+            base_mint,
             coin_vault,
             pc_vault,
             vault_signer_key,
@@ -205,42 +216,10 @@ impl Market {
             market_info,
         };
 
-
-        let oos_key_str = std::env::var("OOS_KEY").unwrap_or("J393rZhx4VcGaRA48N21T1EZmCJuCkxfzUo8mQWoY7LS".to_string());
-
-        let orders_key = Pubkey::from_str(oos_key_str.as_str());
-
-        // TODO: use this method to get oos account
-        // let oo_accounts = market
-        //     .rpc_client
-        //     .inner()
-        //     .get_token_accounts_by_owner(
-        //         &market.owner.pubkey(),
-        //         TokenAccountsFilter::ProgramId(anchor_spl::token::ID),
-        //     )
-        //     .await.unwrap();
-
-        // if oo_accounts.is_empty() {
-        //     println!("[*] Orders Key not found, creating Orders Key...");
-
-        //     let key = OpenOrders::make_create_account_transaction(
-        //         &market.rpc_client,
-        //         program_id,
-        //         &market.owner,
-        //         market_address,
-        //     )
-        //     .await
-        //     .unwrap();
-        //     println!("[*] Orders Key created successfully!");
-        //     market.orders_key = key;
-        // } else {
-        //     market.orders_key = oo_accounts[0].pubkey.parse().unwrap();
-        // }
-
-        market.orders_key = orders_key.unwrap();
+        market.orders_key = open_orders_cache_entry.accounts[0].address;
 
         if load {
-            market.load().await.unwrap();
+            market.load().await?;
         }
 
         let (_, vault_signer_key) = {
@@ -255,77 +234,10 @@ impl Market {
         };
         market.vault_signer_key = vault_signer_key;
 
-        market.base_ata =
-            get_associated_token_address(&market.owner.pubkey().clone(), &market.base_ata);
-        market.quote_ata =
-            get_associated_token_address(&market.owner.pubkey().clone(), &market.quote_ata);
+        market.base_ata = get_associated_token_address(&pub_owner_key.clone(), &market.base_mint);
+        market.quote_ata = get_associated_token_address(&pub_owner_key.clone(), &market.quote_mint);
 
-        market
-    }
-
-    /// Finds or creates an associated token account for a given wallet and mint.
-    ///
-    /// # Arguments
-    ///
-    /// * `&self` - A reference to the `Market` struct.
-    /// * `wallet` - A reference to the wallet's `Keypair`.
-    /// * `mint` - A reference to the mint's `Pubkey`.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the `Pubkey` of the associated token account or a boxed `Error` if an error occurs.
-    pub async fn find_or_create_associated_token_account(
-        &self,
-        wallet: &Keypair,
-        mint: &Pubkey,
-    ) -> Result<Pubkey, Box<dyn Error>> {
-        let ata_address = get_associated_token_address(&wallet.pubkey(), mint);
-
-        let tokens = self
-            .rpc_client
-            .inner()
-            .get_token_accounts_by_owner(
-                &wallet.pubkey(),
-                TokenAccountsFilter::ProgramId(anchor_spl::token::ID),
-            )
-            .await?;
-
-        if !tokens.is_empty() {
-            debug!("[*] Found ATA: {:?}", tokens[0].pubkey);
-            return Ok(tokens[0].pubkey.parse().unwrap());
-        }
-
-        debug!("[*] ATA not found, creating ATA");
-
-        let create_ata_ix = create_associated_token_account(
-            &wallet.pubkey(),
-            &ata_address,
-            mint,
-            &anchor_spl::token::ID,
-        );
-        let message = Message::new(&[create_ata_ix], Some(&wallet.pubkey()));
-        let mut transaction = Transaction::new_unsigned(message);
-        let recent_blockhash = self
-            .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-
-        transaction.sign(&[wallet], recent_blockhash);
-
-        let result = self
-            .rpc_client
-            .inner()
-            .send_and_confirm_transaction(&transaction)
-            .await;
-
-        match result {
-            Ok(sig) => debug!("[*] Transaction successful, signature: {:?}", sig),
-            Err(err) => error!("[*] Transaction failed: {:?}", err),
-        };
-
-        Ok(ata_address)
+        Ok(market)
     }
 
     /// Loads market information, including account details and state, using the provided RPC client.
@@ -346,7 +258,7 @@ impl Market {
     ///
     /// This function may return an error if there is an issue with fetching accounts
     /// or processing the market information.
-    pub async fn load(&mut self) -> anyhow::Result<MarketState> {
+    pub async fn load(&mut self) -> Result<MarketState> {
         let mut account = self
             .rpc_client
             .inner()
@@ -392,7 +304,7 @@ impl Market {
     pub async fn load_market_state_bids_info<'a>(
         &'a mut self,
         account_info: &'a AccountInfo<'_>,
-    ) -> anyhow::Result<RefMut<MarketState>> {
+    ) -> Result<RefMut<MarketState>> {
         let mut market_state = MarketState::load(account_info, &self.program_id, false)?;
 
         {
@@ -443,7 +355,7 @@ impl Market {
     pub async fn load_bids_asks_info(
         &mut self,
         market_state: &RefMut<'_, MarketState>,
-    ) -> anyhow::Result<(Pubkey, Pubkey, MarketInfo)> {
+    ) -> Result<(Pubkey, Pubkey, MarketInfo)> {
         let (bids_address, asks_address) = self.get_bids_asks_addresses(market_state);
 
         let mut bids_account = self.rpc_client.inner().get_account(&bids_address).await?;
@@ -501,10 +413,7 @@ impl Market {
     /// # Errors
     ///
     /// This function may return an error if there is an issue with processing the bids information.
-    pub fn process_bids(
-        &self,
-        bids: &mut RefMut<Slab>,
-    ) -> anyhow::Result<(Vec<u128>, Vec<f64>, u64)> {
+    pub fn process_bids(&self, bids: &mut RefMut<Slab>) -> Result<(Vec<u128>, Vec<f64>, u64)> {
         let mut max_bid = 0;
         let mut open_bids = Vec::new();
         let mut open_bids_prices = Vec::new();
@@ -530,8 +439,7 @@ impl Market {
                     open_bids_prices.push(ui_price);
                 }
             }
-            None => {
-            }
+            None => {}
         }
         Ok((open_bids, open_bids_prices, max_bid))
     }
@@ -549,10 +457,7 @@ impl Market {
     /// # Returns
     ///
     /// A `Result` containing the maximum bid price if successful, or an error if processing asks fails.
-    pub fn process_asks(
-        &self,
-        asks: &mut RefMut<Slab>,
-    ) -> anyhow::Result<(Vec<u128>, Vec<f64>, u64)> {
+    pub fn process_asks(&self, asks: &mut RefMut<Slab>) -> Result<(Vec<u128>, Vec<f64>, u64)> {
         let mut min_ask = 0;
         let mut open_asks = Vec::new();
         let mut open_asks_prices = Vec::new();
@@ -606,21 +511,22 @@ impl Market {
     /// use openbook::utils::read_keypair;
     /// use openbook::state::MarketState;
     /// use openbook::tokens_and_markets::{get_market_name, get_program_id};
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
     ///
-    ///     let program_id = get_program_id(3).parse().unwrap();
-    ///     let market_address = get_market_name("usdc").0.parse().unwrap();
+    ///     let program_id = get_program_id(DexVersion::default()).parse()?;
+    ///     let market_address = get_market_name(Token::USDC).0.parse()?;
     ///
     ///     let rpc_client1 = RpcClient::new(rpc_url.clone());
     ///     let rpc_client2 = RpcClient::new(rpc_url.clone());
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client1, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client1, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
@@ -676,21 +582,22 @@ impl Market {
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
     /// use openbook::state::MarketState;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
     ///
-    ///     let program_id = get_program_id(3).parse().unwrap();
-    ///     let market_address = get_market_name("usdc").0.parse().unwrap();
+    ///     let program_id = get_program_id(DexVersion::default()).parse()?;
+    ///     let market_address = get_market_name(Token::USDC).0.parse()?;
     ///
     ///     let rpc_client1 = RpcClient::new(rpc_url.clone());
     ///     let rpc_client2 = RpcClient::new(rpc_url.clone());
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client1, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client1, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let mut account = rpc_client2.get_account(&market_address).await?;
     ///
@@ -755,6 +662,7 @@ impl Market {
     /// use openbook::utils::read_keypair;
     /// use openbook::matching::Side;
     /// use openbook::market::OrderReturnType;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -765,13 +673,13 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
-    ///     let target_amount_quote = 10.0;
+    ///     let target_amount_quote = 5.0;
     ///     let side = Side::Bid; // or Side::Ask
-    ///     let best_offset_usdc = 0.5;
+    ///     let best_offset_usdc = 5.0;
     ///     let execute = true;
-    ///     let target_price = 15.0;
+    ///     let target_price = 2.1;
     ///
     ///     if let Some(ord_ret_type) = market.place_limit_order(
     ///         target_amount_quote,
@@ -801,7 +709,7 @@ impl Market {
         best_offset_usdc: f64,
         execute: bool,
         target_price: f64,
-    ) -> anyhow::Result<Option<OrderReturnType>, ClientError> {
+    ) -> Result<Option<OrderReturnType>, Error> {
         // coin: base
         // pc: quote
         let base_d_factor = 10u32.pow(self.coin_decimals as u32) as f64;
@@ -876,8 +784,7 @@ impl Market {
             u16::MAX,
             max_native_pc_qty_including_fees,
             (get_unix_secs() + 30) as i64,
-        )
-        .unwrap();
+        )?;
 
         let instructions = vec![place_order_ix];
 
@@ -934,6 +841,7 @@ impl Market {
     /// use openbook::market::OrderReturnType;
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -944,7 +852,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     if let Some(ord_ret_type) = market
     ///         .cancel_orders(true)
@@ -963,10 +871,7 @@ impl Market {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn cancel_orders(
-        &self,
-        execute: bool,
-    ) -> anyhow::Result<Option<OrderReturnType>, ClientError> {
+    pub async fn cancel_orders(&self, execute: bool) -> Result<Option<OrderReturnType>, Error> {
         let mut ixs = Vec::new();
 
         for oid in &self.market_info.open_bids {
@@ -980,8 +885,7 @@ impl Market {
                 &self.event_queue,
                 Side::Bid,
                 *oid,
-            )
-            .unwrap();
+            )?;
             ixs.push(ix);
         }
 
@@ -996,8 +900,7 @@ impl Market {
                 &self.event_queue,
                 Side::Ask,
                 *oid,
-            )
-            .unwrap();
+            )?;
             ixs.push(ix);
         }
 
@@ -1057,6 +960,7 @@ impl Market {
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
     /// use openbook::market::OrderReturnType;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1067,7 +971,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     if let Some(ord_ret_type) = market
     ///         .settle_balance(true)
@@ -1086,10 +990,7 @@ impl Market {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn settle_balance(
-        &self,
-        execute: bool,
-    ) -> anyhow::Result<Option<OrderReturnType>, ClientError> {
+    pub async fn settle_balance(&self, execute: bool) -> Result<Option<OrderReturnType>, Error> {
         let ix = openbook_dex::instruction::settle_funds(
             &self.program_id,
             &self.market_address,
@@ -1102,8 +1003,7 @@ impl Market {
             &self.quote_ata,
             None,
             &self.vault_signer_key,
-        )
-        .unwrap();
+        )?;
 
         let instructions = vec![ix];
 
@@ -1155,6 +1055,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1165,7 +1066,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let result = market.make_match_orders_transaction(100).await?;
     ///
@@ -1177,7 +1078,7 @@ impl Market {
     pub async fn make_match_orders_transaction(
         &self,
         limit: u16,
-    ) -> anyhow::Result<Signature, ClientError> {
+    ) -> Result<Signature, ClientError> {
         let ix = openbook_dex::instruction::match_orders(
             &self.program_id,
             &self.market_address,
@@ -1235,6 +1136,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1245,7 +1147,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let target_size_usdc_ask = 0.5;
     ///     let target_size_usdc_bid = 1.0;
@@ -1265,7 +1167,7 @@ impl Market {
         target_size_usdc_bid: f64,
         bid_price_jlp_usdc: f64,
         ask_price_jlp_usdc: f64,
-    ) -> anyhow::Result<Option<Signature>> {
+    ) -> Result<Option<Signature>> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1371,7 +1273,7 @@ impl Market {
         {
             Ok(sign) => Ok(Some(sign)),
             Err(err) => {
-                error!("err combo'ing: {err}, {}", kp_str);
+                error!("[*] err combo'ing: {err}, {}", kp_str);
                 Ok(None)
             }
         }
@@ -1394,6 +1296,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1404,7 +1307,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let result = market.cancel_settle_place_bid(1.5, 1.0).await?;
     ///
@@ -1417,7 +1320,7 @@ impl Market {
         &mut self,
         target_size_usdc_bid: f64,
         bid_price_jlp_usdc: f64,
-    ) -> anyhow::Result<Option<Signature>> {
+    ) -> Result<Option<Signature>> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1504,10 +1407,10 @@ impl Market {
         {
             Ok(sign) => Ok(Some(sign)),
             Err(err) => {
-                error!("err bidding: {err}, {}", kp_str);
+                error!("[*] err bidding: {err}, {}", kp_str);
                 let e = err.get_transaction_error();
                 if let Some(e) = e {
-                    error!("got tx err: {e}");
+                    error!("[*] got tx err: {e}");
                 }
                 Ok(None)
             }
@@ -1531,6 +1434,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1541,7 +1445,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let result = market.cancel_settle_place_ask(1.5, 1.0).await?;
     ///
@@ -1554,7 +1458,7 @@ impl Market {
         &mut self,
         target_size_usdc_ask: f64,
         ask_price_jlp_usdc: f64,
-    ) -> anyhow::Result<Option<Signature>> {
+    ) -> Result<Option<Signature>> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1642,7 +1546,7 @@ impl Market {
         {
             Ok(sign) => Ok(Some(sign)),
             Err(err) => {
-                error!("err asking: {err}, {}", kp_str);
+                error!("[*] err asking: {err}, {}", kp_str);
                 Ok(None)
             }
         }
@@ -1660,6 +1564,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1670,7 +1575,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let result = market.cancel_settle().await?;
     ///
@@ -1679,7 +1584,7 @@ impl Market {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn cancel_settle(&mut self) -> anyhow::Result<Option<Signature>> {
+    pub async fn cancel_settle(&mut self) -> Result<Option<Signature>> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1748,7 +1653,7 @@ impl Market {
         {
             Ok(sign) => Ok(Some(sign)),
             Err(err) => {
-                error!("err canceling: {err}\npk: {}", kp_str);
+                error!("[*] err canceling: {err}\npk: {}", kp_str);
                 Ok(None)
             }
         }
@@ -1770,6 +1675,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1780,7 +1686,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let result = market.load_bids()?;
     ///
@@ -1809,6 +1715,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1819,7 +1726,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let result = market.load_asks()?;
     ///
@@ -1842,7 +1749,7 @@ impl Market {
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `Signature` of the transaction or a `ClientError` if an error occurs.
+    /// A `Result` containing the `Signature` of the transaction or a `Error` if an error occurs.
     ///
     /// # Examples
     ///
@@ -1850,6 +1757,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1860,7 +1768,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
@@ -1909,7 +1817,7 @@ impl Market {
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `Signature` of the transaction or a `ClientError` if an error occurs.
+    /// A `Result` containing the `Signature` of the transaction or a `Error` if an error occurs.
     ///
     /// # Examples
     ///
@@ -1917,6 +1825,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1927,7 +1836,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     ///     let limit = 10;
@@ -1984,6 +1893,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1994,7 +1904,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let result = market.load_orders_for_owner().await?;
     ///
@@ -2036,6 +1946,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -2046,7 +1957,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///
     ///     let bids = market.market_info.clone();
     ///     let asks = market.market_info.clone();
@@ -2094,6 +2005,7 @@ impl Market {
     /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
     /// use openbook::market::Market;
     /// use openbook::utils::read_keypair;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -2104,7 +2016,7 @@ impl Market {
     ///
     ///     let keypair = read_keypair(&key_path);
     ///
-    ///     let mut market = Market::new(rpc_client, 3, "jlp", "usdc", keypair, true).await;
+    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
     ///     let owner_address = &Pubkey::new_from_array([0; 32]);
     ///
     ///     let result = market.find_open_orders_accounts_for_owner(&owner_address, 5000).await?;
