@@ -47,7 +47,7 @@ cargo install --locked openbook --all-features
 
 ## Usage
 
-Before using the `openbook` crate or CLI ot TUI, make sure to set the following environment variables:
+Before using the `openbook` crate or CLI, make sure to set the following environment variables:
 
 ```bash
 export RPC_URL=https://api.mainnet-beta.solana.com
@@ -104,7 +104,7 @@ openbook settle -e
 ### Cancel Settle Place Order:
 
 ```sh
-openbook cancel-settle-place -u 10.0 -t 0.5 -p 15.0 -a 1.3
+openbook cancel-settle-place -u 5.0 -t 2.5 -p 5.0 -a 5.0
 ```
 
 ### Cancel Settle Place Bid Order:
@@ -151,30 +151,22 @@ openbook = "0.0.11"
 ```
 
 ```rust
-use openbook::{pubkey::Pubkey, rpc_client::RpcClient};
-use openbook::market::Market;
-use openbook::utils::read_keypair;
-use openbook::matching::Side;
+use openbook::orders::OrderReturnType;
 use openbook::commitment_config::CommitmentConfig;
-use openbook::market::OrderReturnType;
-use openbook::tokens_and_markets::{Token, DexVersion};
+use openbook::ob_client::OBClient;
+use openbook::tokens_and_markets::{DexVersion, Token};
+use openbook::matching::Side;
+use openbook::pubkey::Pubkey;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
-    let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
+    let commitment = CommitmentConfig::confirmed();
 
-    let commitment_config = CommitmentConfig::confirmed();
-    let rpc_client = RpcClient::new_with_commitment(rpc_url, commitment_config);
-    
-    let keypair = read_keypair(&key_path);
-    
-    let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, keypair, true).await?;
-
-    println!("Initialized Market: {:?}", market);
+    let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    println!("Initialized OpenBook Client: {:?}", ob_client);
 
     println!("[*] Place Limit Order");
-    if let Some(ord_ret_type) = market
+    if let Some(ord_ret_type) = ob_client
         .place_limit_order(
             0.1,
             Side::Bid, // or Side::Ask
@@ -195,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("[*] Cancel Orders");
-    if let Some(ord_ret_type) = market
+    if let Some(ord_ret_type) = ob_client
         .cancel_orders(
             true
         )
@@ -212,7 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("[*] Settle Balance");
-    if let Some(ord_ret_type) = market
+    if let Some(ord_ret_type) = ob_client
         .settle_balance(
             true
         )
@@ -229,7 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("[*] Cancel Settle Place Order");
-    let result = market
+    let result = ob_client
         .cancel_settle_place(
             10.0,
             0.5,
@@ -240,27 +232,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[*] Transaction successful, signature: {:?}", result);
 
     println!("[*] Cancel Settle Place Bid Order");
-    let result = market
+    let result = ob_client
         .cancel_settle_place_bid(0.5, 15.0)
         .await?;
     println!("[*] Transaction successful, signature: {:?}", result);
 
     println!("[*] Cancel Settle Ask Order");
-    let result = market
+    let result = ob_client
         .cancel_settle_place_ask(0.5, 15.0)
         .await?;
     println!("[*] Transaction successful, signature: {:?}", result);
 
-    let m = market.make_match_orders_transaction(1).await?;
+    let m = ob_client.make_match_orders_transaction(1).await?;
     println!("Match Order Result: {:?}", m);
 
     let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
     let limit = 10;
 
-    let e = market.make_consume_events_instruction(open_orders_accounts.clone(), limit).await?;
+    let e = ob_client.make_consume_events_instruction(open_orders_accounts.clone(), limit).await?;
     println!("Consume Events Result: {:?}", e);
 
-    let p = market.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
+    let p = ob_client.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
     println!("Consume Events Permissioned Result: {:?}", p);
 
     Ok(())

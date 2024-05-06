@@ -9,10 +9,7 @@ use std::str::FromStr;
 fn test_get_layout_version_known_id() {
     let known_program_id =
         Pubkey::from_str("4ckmDgGdxQoPDLUkDT3vHgSAkzA3QRdNq5ywwY4sUSJn").unwrap();
-    assert_eq!(
-        get_layout_version(&known_program_id),
-        DexVersion::DepDexV0
-    );
+    assert_eq!(get_layout_version(&known_program_id), DexVersion::DepDexV0);
 }
 
 #[test]

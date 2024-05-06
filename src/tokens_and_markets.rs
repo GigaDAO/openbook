@@ -45,6 +45,8 @@ impl Token {
     }
 }
 
+pub static SPL_TOKEN_ID: &'static str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+
 /// Represents the layout versions associated with Solana programs.
 ///
 /// This static array contains tuples where the first element represents the program ID in string format,

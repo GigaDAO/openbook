@@ -1,6 +1,5 @@
 //! This module implements a thread safe client to interact with a remote Solana node.
 
-use solana_account_decoder::UiAccountEncoding;
 use std::fmt;
 use std::sync::Arc;
 
@@ -11,8 +10,7 @@ use solana_client::{
     client_error::ClientError,
     nonblocking::rpc_client::RpcClient,
     rpc_client::GetConfirmedSignaturesForAddress2Config,
-    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcTransactionConfig},
-    rpc_filter::RpcFilterType,
+    rpc_config::{RpcAccountInfoConfig, RpcTransactionConfig},
     rpc_response::RpcConfirmedTransactionStatusWithSignature,
 };
 use solana_sdk::{account::Account, pubkey::Pubkey, signature::Signature};
@@ -124,6 +122,7 @@ impl Rpc {
     /// ```rust
     /// use openbook::signature::Signature;
     /// use openbook::rpc_client::RpcClient;
+    /// use openbook::tokens_and_markets::SPL_TOKEN_ID;
     /// use openbook::rpc::Rpc;
     ///
     /// #[tokio::main]
@@ -133,7 +132,7 @@ impl Rpc {
     ///     let connection = RpcClient::new(rpc_url);
     ///     let rpc_client = Rpc::new(connection);
     ///
-    ///     match rpc_client.fetch_signatures_for_address(&anchor_spl::token::ID, Some(Signature::default()),
+    ///     match rpc_client.fetch_signatures_for_address(&SPL_TOKEN_ID.parse().unwrap(), Some(Signature::default()),
     ///         Some(Signature::default())).await {
     ///             Ok(accounts) => println!("Filtered accounts: {:?}", accounts),
     ///             Err(err) => eprintln!("Error getting filtered accounts: {:?}", err),
@@ -157,66 +156,6 @@ impl Rpc {
             };
             self.inner()
                 .get_signatures_for_address_with_config(pubkey, config)
-                .await
-        })
-        .retry(&ExponentialBuilder::default())
-        .await
-    }
-
-    /// Retrieves program accounts associated with a specific program.
-    ///
-    /// # Parameters
-    ///
-    /// - `program`: The public key of the program.
-    /// - `filters`: Optional. Filters to apply to the accounts.
-    ///
-    /// # Returns
-    ///
-    /// A list of program accounts, or an error otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use openbook::rpc_filter::{RpcFilterType, Memcmp};
-    /// use openbook::rpc::Rpc;
-    /// use openbook::rpc_client::RpcClient;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set");
-    ///
-    ///     let connection = RpcClient::new(rpc_url);
-    ///     let rpc_client = Rpc::new(connection);
-    ///
-    ///     let filters = vec![RpcFilterType::Memcmp(Memcmp::new_raw_bytes(0, vec![1u8]))];
-    ///
-    ///     match rpc_client.fetch_program_accounts(&anchor_spl::token::ID, Some(filters)).await {
-    ///         Ok(accounts) => println!("Filtered accounts: {:?}", accounts),
-    ///         Err(err) => eprintln!("Error getting filtered accounts: {:?}", err),
-    ///     }
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
-    pub async fn fetch_program_accounts(
-        &self,
-        program: &Pubkey,
-        filters: Option<Vec<RpcFilterType>>,
-    ) -> Result<Vec<(Pubkey, Account)>, ClientError> {
-        (|| async {
-            let filters = filters.clone();
-
-            let config = RpcProgramAccountsConfig {
-                filters,
-                account_config: RpcAccountInfoConfig {
-                    encoding: Some(UiAccountEncoding::Base64),
-                    commitment: Some(self.inner().commitment()),
-                    ..RpcAccountInfoConfig::default()
-                },
-                ..RpcProgramAccountsConfig::default()
-            };
-            self.inner()
-                .get_program_accounts_with_config(program, config)
                 .await
         })
         .retry(&ExponentialBuilder::default())
