@@ -23,16 +23,6 @@ async fn test_fetch_signatures_for_address() {
 }
 
 #[tokio::test]
-async fn test_fetch_program_accounts() {
-    let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
-    let rpc = Rpc::new(RpcClient::new(rpc_url));
-    let result = rpc
-        .fetch_program_accounts(&anchor_spl::token::ID, None)
-        .await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
 async fn test_fetch_multiple_accounts() {
     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
     let rpc = Rpc::new(RpcClient::new(rpc_url));

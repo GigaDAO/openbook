@@ -25,9 +25,10 @@ use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
 
 use crate::commitment_config::CommitmentConfig;
-use crate::market::Market;
-use crate::market::OrderReturnType;
 use crate::matching::Side;
+use crate::ob_client::OBClient;
+use crate::orders::OrderReturnType;
+use crate::rpc::Rpc;
 use crate::rpc_client::RpcClient;
 use crate::utils::read_keypair;
 
@@ -107,15 +108,15 @@ struct App {
     current_input: Option<CurrentInput>,
     market_info: HashMap<String, String>,
     wallet_info: HashMap<String, String>,
-    market: Option<Market>,
+    ob_client: Option<OBClient>,
     selected_tab: SelectedTab,
 }
 
 impl Default for App {
     fn default() -> App {
         App {
-            rpc_url_input: Input::default(),
-            key_path_input: Input::default(),
+            rpc_url_input: Input::new("https://api.mainnet-beta.solana.com".to_string()),
+            key_path_input: Input::new("~/.config/solana/id.json".to_string()),
             base_mint_input: Input::default(),
             quote_mint_input: Input::default(),
             side_input: Input::default(),
@@ -125,7 +126,7 @@ impl Default for App {
             current_input: Some(CurrentInput::RpcUrl),
             market_info: HashMap::new(),
             wallet_info: HashMap::new(),
-            market: None,
+            ob_client: None,
             selected_tab: Default::default(),
         }
     }
@@ -187,7 +188,6 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                             app.rpc_url_input.value().to_string(),
                             commitment_config,
                         );
-
                         let owner = read_keypair(&app.key_path_input.value().to_string());
 
                         assert_eq!(rpc_client.commitment(), CommitmentConfig::confirmed());
@@ -197,53 +197,89 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                         let quote_mint =
                             Token::from_str(app.quote_mint_input.value()).unwrap_or(Token::USDC);
 
-                        if app.market.is_none() {
-                            app.market = Some(
-                                Market::new(
-                                    rpc_client,
-                                    DexVersion::default(),
-                                    base_mint,
-                                    quote_mint,
-                                    owner,
-                                    true,
-                                )
-                                .await?,
-                            );
+                        if app.ob_client.is_none() {
+                            let mut ob_client = OBClient::new(
+                                commitment_config,
+                                DexVersion::default(),
+                                base_mint,
+                                quote_mint,
+                                true,
+                                123456789,
+                            )
+                            .await?;
+                            ob_client.rpc_client = Rpc::new(rpc_client);
+                            ob_client.owner = owner;
+                            app.ob_client = Some(ob_client);
                         }
 
                         match app.selected_tab {
                             SelectedTab::Tab1 => {
                                 app.market_info.insert(
                                     "Market Address".to_string(),
-                                    app.market.as_ref().unwrap().market_address.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .market_address
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "Base Mint".to_string(),
-                                    app.market.as_ref().unwrap().base_mint.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .base_mint
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "Quote Mint".to_string(),
-                                    app.market.as_ref().unwrap().quote_mint.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .quote_mint
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "Coin Vault".to_string(),
-                                    app.market.as_ref().unwrap().coin_vault.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .coin_vault
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "PC Vault".to_string(),
-                                    app.market.as_ref().unwrap().pc_vault.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .pc_vault
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "Event Queue".to_string(),
-                                    app.market.as_ref().unwrap().event_queue.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .event_queue
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "Request Queue".to_string(),
-                                    app.market.as_ref().unwrap().request_queue.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .request_queue
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "Asks Address".to_string(),
-                                    app.market
+                                    app.ob_client
                                         .as_ref()
                                         .unwrap()
                                         .market_info
@@ -252,7 +288,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                                 );
                                 app.market_info.insert(
                                     "Bids Address".to_string(),
-                                    app.market
+                                    app.ob_client
                                         .as_ref()
                                         .unwrap()
                                         .market_info
@@ -261,55 +297,95 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                                 );
                                 app.market_info.insert(
                                     "Coin Decimals".to_string(),
-                                    app.market.as_ref().unwrap().coin_decimals.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .coin_decimals
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "PC Decimals".to_string(),
-                                    app.market.as_ref().unwrap().pc_decimals.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .pc_decimals
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "Coin Lot Size".to_string(),
-                                    app.market.as_ref().unwrap().coin_lot_size.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .coin_lot_size
+                                        .to_string(),
                                 );
                                 app.market_info.insert(
                                     "PC Lot Size".to_string(),
-                                    app.market.as_ref().unwrap().pc_lot_size.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .pc_lot_size
+                                        .to_string(),
+                                );
+                                app.market_info.insert(
+                                    "Vault Signer Key".to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .market_info
+                                        .vault_signer_key
+                                        .to_string(),
                                 );
 
                                 app.wallet_info.insert(
                                     "Wallet Public Key".to_string(),
-                                    app.market.as_ref().unwrap().owner.pubkey().to_string(),
+                                    app.ob_client.as_ref().unwrap().owner.pubkey().to_string(),
                                 );
                                 app.wallet_info.insert(
                                     "Base ATA".to_string(),
-                                    app.market.as_ref().unwrap().base_ata.to_string(),
+                                    app.ob_client.as_ref().unwrap().base_ata.to_string(),
                                 );
                                 app.wallet_info.insert(
                                     "Quote ATA".to_string(),
-                                    app.market.as_ref().unwrap().quote_ata.to_string(),
-                                );
-                                app.wallet_info.insert(
-                                    "Vault Signer Key".to_string(),
-                                    app.market.as_ref().unwrap().vault_signer_key.to_string(),
+                                    app.ob_client.as_ref().unwrap().quote_ata.to_string(),
                                 );
                                 app.wallet_info.insert(
                                     "Open Order Account".to_string(),
-                                    app.market.as_ref().unwrap().orders_key.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .open_orders
+                                        .oo_key
+                                        .to_string(),
                                 );
                                 app.wallet_info.insert(
                                     "Min Ask".to_string(),
-                                    app.market.as_ref().unwrap().market_info.min_ask.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .open_orders
+                                        .min_ask
+                                        .to_string(),
                                 );
                                 app.wallet_info.insert(
                                     "Max Bid".to_string(),
-                                    app.market.as_ref().unwrap().market_info.max_bid.to_string(),
+                                    app.ob_client
+                                        .as_ref()
+                                        .unwrap()
+                                        .open_orders
+                                        .max_bid
+                                        .to_string(),
                                 );
 
                                 let open_asks: String = app
-                                    .market
+                                    .ob_client
                                     .as_ref()
                                     .unwrap()
-                                    .market_info
+                                    .open_orders
                                     .open_asks
                                     .iter()
                                     .map(|&x| x.to_string())
@@ -318,10 +394,10 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                                 app.wallet_info.insert("Open Asks".to_string(), open_asks);
 
                                 let open_bids: String = app
-                                    .market
+                                    .ob_client
                                     .as_ref()
                                     .unwrap()
-                                    .market_info
+                                    .open_orders
                                     .open_bids
                                     .iter()
                                     .map(|&x| x.to_string())
@@ -338,7 +414,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                                 let price = app.target_price_input.value().parse::<f64>().unwrap();
 
                                 let result = app
-                                    .market
+                                    .ob_client
                                     .as_ref()
                                     .unwrap()
                                     .place_limit_order(5.0, side, 5.0, true, price)
