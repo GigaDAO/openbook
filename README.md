@@ -1,5 +1,9 @@
 # 📖 OpenBook
 
+[![Work In Progress](https://img.shields.io/badge/Work%20In%20Progress-red)](https://github.com/wiseaidev)
+[![made-with-rust](https://img.shields.io/badge/Made%20with-Rust-1f425f.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.75%2B-blue.svg)](https://www.rust-lang.org)
+[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/wiseaidev)
 [![CircleCI](https://dl.circleci.com/status-badge/img/gh/GigaDAO/openbook/tree/master.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/GigaDAO/openbook/tree/master)
 [![Crates.io](https://img.shields.io/crates/v/openbook.svg)](https://crates.io/crates/openbook)
 [![Crates.io Downloads](https://img.shields.io/crates/d/openbook)](https://crates.io/crates/openbook)
