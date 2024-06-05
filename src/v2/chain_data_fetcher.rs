@@ -133,6 +133,7 @@ impl AccountFetcher {
     }
 }
 
+#[async_trait::async_trait]
 impl AccountFetcherTrait for AccountFetcher {
     async fn fetch_raw_account(
         &self,

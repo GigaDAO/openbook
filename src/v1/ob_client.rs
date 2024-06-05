@@ -1673,7 +1673,7 @@ impl OBClient {
             .expect("Time went backwards")
             .as_millis();
         if let Some(cache_entry) = self.open_orders_cache.get(&owner_address) {
-            if now - cache_entry.ts < cache_duration_ms.into() {
+            if now - cache_entry.ts < cache_duration_ms as u128 {
                 return Ok(cache_entry.open_orders.clone());
             }
         }

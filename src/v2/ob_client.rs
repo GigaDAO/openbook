@@ -1,11 +1,8 @@
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
-
-use anchor_client::Cluster;
 
 use anchor_lang::prelude::System;
-use anchor_lang::{AccountDeserialize, Id};
+use anchor_lang::Id;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::Token;
 
@@ -20,19 +17,18 @@ use openbook_v2::{
 use solana_client::nonblocking::rpc_client::RpcClient as RpcClientAsync;
 use solana_client::rpc_config::RpcSendTransactionConfig;
 use solana_sdk::address_lookup_table_account::AddressLookupTableAccount;
-use solana_sdk::commitment_config::CommitmentLevel;
 use solana_sdk::hash::Hash;
-use solana_sdk::signer::keypair;
 use solana_sdk::transaction::TransactionError;
 
 use crate::v2::account_fetcher::*;
 use crate::v2::context::MarketContext;
-use crate::v2::gpa::{fetch_anchor_account, fetch_openbook_accounts};
+use spl_associated_token_account::get_associated_token_address;
 
-use anyhow::Context;
+use anyhow::{Error, Result};
 use solana_sdk::instruction::Instruction;
 use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey, signer::Signer};
+use tracing::error;
 
 use crate::rpc::Rpc;
 use rand::random;
@@ -40,10 +36,12 @@ use solana_sdk::clock::Slot;
 
 use crate::rpc_client::RpcClient;
 use crate::utils::get_unix_secs;
+use crate::utils::read_keypair;
+use anyhow::Context;
 use fixed::types::I80F48;
 use openbook_v2::state::BookSide;
 use serde::{Deserialize, Serialize};
-use solana_sdk::account::Account;
+use solana_sdk::transaction::Transaction;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -102,8 +100,12 @@ pub struct OBClient {
     pub base_ata: Pubkey,
     pub index_account: Pubkey,
     pub market_id: Pubkey,
+    pub account_fetcher: Arc<dyn AccountFetcherTrait>,
+
     /// Account info of the wallet on the market (e.g., open orders).
-    pub open_orders: OpenOrderNode,
+    pub open_orders_account: Pubkey,
+    /// open orders.
+    pub open_orders: Vec<OpenOrderNode>,
     /// Information about the OpenBook market.
     pub market_info: Market,
     pub context: MarketContext,
@@ -112,14 +114,14 @@ pub struct OBClient {
 impl Clone for OBClient {
     fn clone(&self) -> Self {
         OBClient {
-            keypair: Keypair::from_bytes(&self.keypair.to_bytes())
-                .expect("Failed to clone Keypair"),
+            owner: self.owner.clone(),
             index_account: self.index_account.clone(),
+            rpc_client: self.rpc_client.clone(),
+            account_fetcher: self.account_fetcher.clone(),
             open_orders_account: self.open_orders_account.clone(),
+            open_orders: self.open_orders.clone(),
             market_id: self.market_id.clone(),
-            client: self.client.clone(),
-            ob_client: self.clone(),
-            market: self.market.clone(),
+            market_info: self.market_info.clone(),
             base_ata: self.base_ata.clone(),
             quote_ata: self.quote_ata.clone(),
             context: self.context.clone(),
@@ -128,63 +130,184 @@ impl Clone for OBClient {
 }
 
 impl OBClient {
-    pub async fn new() -> Self {
-        let keypair = load_env_keypair("SECRET");
-        let index_account = load_env_pubkey("INDEX_ACCOUNT");
-        let open_orders_account = load_env_pubkey("SOL_USDC_OO_ACCOUNT");
-        let market_id = load_env_pubkey("SOL_USDC_MARKET_ID");
-        let base_ata = load_env_pubkey("BASE_ATA");
-        let quote_ata = load_env_pubkey("QUOTE_ATA");
-        let rpc_url = load_env_url("RPC_URL");
-        let client = RpcClient::new();
-        let market = client
-            .rpc_anchor_account::<Market>(&market_id)
+    /// Initializes a new instance of the `OBClient` struct, representing an OpenBook client.
+    ///
+    /// This method initializes the `OBClient` struct, containing information about the requested market,
+    /// having the base and quote mints. It fetches and stores all data about this OpenBook market.
+    /// Additionally, it includes information about the account associated with the wallet on the OpenBook market
+    /// (e.g., open orders, bids, asks, etc.).
+    ///
+    /// # Arguments
+    ///
+    /// * `commitment` - Commitment configuration for transactions.
+    /// * `program_version` - Program dex version representing the market.
+    /// * `base_mint` - Base mint symbol.
+    /// * `quote_mint` - Quote mint symbol.
+    /// * `load` - Boolean indicating whether to load market data immediately.
+    /// * `cache_ts` - Timestamp for caching current open orders.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new instance of the `OBClient` struct initialized with the provided parameters.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v1::ob_client::OBClient;
+    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///
+    ///     println!("Initialized OBClient: {:?}", ob_client);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn new(
+        commitment: CommitmentConfig,
+        market_id: Pubkey,
+        new: bool,
+        load: bool,
+    ) -> Result<Self, Error> {
+        let rpc_url =
+            std::env::var("RPC_URL").unwrap_or("https://api.mainnet-beta.solana.com".to_string());
+        let key_path = std::env::var("KEY_PATH").unwrap_or("".to_string());
+
+        let owner = read_keypair(&key_path);
+        let rpc_client = RpcClient::new_with_commitment(rpc_url.clone(), commitment);
+        let oos_key_str = std::env::var("OOS_KEY").unwrap_or("".to_string());
+        let index_key_str = std::env::var("INDEX_KEY").unwrap_or("".to_string());
+
+        let orders_key = Pubkey::from_str(oos_key_str.as_str());
+        let index_key = Pubkey::from_str(index_key_str.as_str());
+
+        let pub_owner_key = owner.pubkey().clone();
+
+        let rpc = Rpc::new(rpc_client);
+
+        let market_info = rpc
+            .fetch_anchor_account::<Market>(&market_id)
             .await
             .unwrap();
-        let ob_client = OBClient::new_for_existing_account(
-            client.clone(),
-            open_orders_account,
-            Arc::new(keypair.insecure_clone()),
-        )
-        .await
-        .unwrap();
+
+        let base_ata = get_associated_token_address(&pub_owner_key.clone(), &market_info.base_mint);
+        let quote_ata =
+            get_associated_token_address(&pub_owner_key.clone(), &market_info.quote_mint);
+
+        let index_account = Default::default();
+        let open_orders_account = Default::default();
+
         let context = MarketContext {
-            market,
+            market: market_info,
             address: market_id,
         };
-        Self {
-            keypair: keypair.insecure_clone(),
-            index_account,
-            open_orders_account,
-            client,
-            ob_client,
-            market_id,
-            market,
-            base_ata,
+        let rpc_client = RpcClient::new_with_commitment(rpc_url.clone(), commitment);
+
+        let account_fetcher = Arc::new(CachedAccountFetcher::new(Arc::new(RpcAccountFetcher {
+            rpc: rpc_client,
+        })));
+
+        let mut ob_client = Self {
+            rpc_client: rpc,
+            market_info,
+            owner: owner.into(),
             quote_ata,
+            base_ata,
+            index_account,
+            account_fetcher,
+            market_id,
+            open_orders_account,
             context,
+            open_orders: vec![],
+        };
+
+        if !orders_key.is_err() {
+            ob_client.open_orders_account = orders_key.unwrap();
+        }
+
+        if !index_key.is_err() {
+            ob_client.index_account = index_key.unwrap();
+        }
+
+        if load {
+            let (open_orders, _best_quotes) = ob_client.load_bids_asks_info().await?;
+            ob_client.open_orders = open_orders;
+        }
+
+        if new {
+            ob_client.index_account = ob_client.create_open_orders_indexer().await?.0;
+            ob_client.open_orders_account = ob_client.find_or_create_account().await?;
+        }
+
+        Ok(ob_client)
+    }
+
+    pub async fn settle_funds(&self) -> Result<Signature> {
+        let ix = Instruction {
+            program_id: openbook_v2::id(),
+            accounts: {
+                anchor_lang::ToAccountMetas::to_account_metas(
+                    &openbook_v2::accounts::SettleFunds {
+                        owner: self.owner(),
+                        penalty_payer: self.owner(),
+                        open_orders_account: self.open_orders_account,
+                        market: self.market_id,
+                        market_authority: self.market_info.market_authority,
+                        user_base_account: self.base_ata,
+                        user_quote_account: self.quote_ata,
+                        market_base_vault: self.market_info.market_base_vault,
+                        market_quote_vault: self.market_info.market_quote_vault,
+                        referrer_account: None,
+                        system_program: System::id(),
+                        token_program: Token::id(),
+                    },
+                    None,
+                )
+            },
+            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::SettleFunds {}),
+        };
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
         }
     }
-    pub async fn settle_balance(&self) -> anyhow::Result<Signature> {
-        let r = self
-            .settle_funds(
-                self.market,
-                self.market_id,
-                self.base_ata,
-                self.quote_ata,
-                self.market.market_base_vault,
-                self.market.market_quote_vault,
-                None,
-            )
-            .await;
-        r
-    }
+
     pub async fn place_market_order(
         &mut self,
         limit_price: f64,
         quote_size_usd: u64,
         side: Side,
-    ) -> anyhow::Result<Signature> {
+    ) -> Result<Signature> {
         let current_time = get_unix_secs();
         let price_lots = self.native_price_to_lots_price(limit_price);
         let max_quote_lots = self
@@ -196,35 +319,84 @@ impl OBClient {
             Side::Bid => self.quote_ata.clone(),
             Side::Ask => self.base_ata.clone(),
         };
-        let vault = self.market.get_vault_by_side(side);
+        let vault = self.market_info.get_vault_by_side(side);
 
         tracing::debug!("base: {max_base_lots}, quote: {max_quote_lots}");
         let oid = random::<u64>();
-        let r = self
-            .place_order(
-                self.market,
-                self.market_id,
-                side,
-                price_lots,
-                max_base_lots as i64,
-                max_quote_lots as i64,
-                oid,
-                PlaceOrderType::PostOnly,
-                current_time + 86_400,
-                12,
-                ata,
-                vault,
-                SelfTradeBehavior::AbortTransaction,
-            )
-            .await;
-        r
+
+        // TODO: update to market order inst
+        let ix = Instruction {
+            program_id: openbook_v2::id(),
+            accounts: {
+                anchor_lang::ToAccountMetas::to_account_metas(
+                    &openbook_v2::accounts::PlaceOrder {
+                        open_orders_account: self.open_orders_account,
+                        open_orders_admin: None,
+                        signer: self.owner(),
+                        market: self.market_id,
+                        bids: self.market_info.bids,
+                        asks: self.market_info.asks,
+                        event_heap: self.market_info.event_heap,
+                        oracle_a: self.market_info.oracle_a.into(),
+                        oracle_b: self.market_info.oracle_b.into(),
+                        user_token_account: ata,
+                        market_vault: vault,
+                        token_program: Token::id(),
+                    },
+                    None,
+                )
+            },
+            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrder {
+                args: PlaceOrderArgs {
+                    side,
+                    price_lots,
+                    max_base_lots: max_base_lots as i64,
+                    max_quote_lots_including_fees: max_quote_lots as i64,
+                    client_order_id: oid,
+                    order_type: PlaceOrderType::PostOnly,
+                    expiry_timestamp: current_time + 86_400,
+                    self_trade_behavior: SelfTradeBehavior::AbortTransaction,
+                    limit: 12,
+                },
+            }),
+        };
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
+        }
     }
+
     pub async fn place_limit_order(
         &mut self,
         limit_price: f64,
         quote_size_usd: u64,
         side: Side,
-    ) -> anyhow::Result<(u64, Signature, Slot)> {
+    ) -> Result<(u64, Signature, Slot)> {
         let current_time = get_unix_secs();
         let price_lots = self.native_price_to_lots_price(limit_price);
         let max_quote_lots = self
@@ -236,83 +408,266 @@ impl OBClient {
             Side::Bid => self.quote_ata.clone(),
             Side::Ask => self.base_ata.clone(),
         };
-        let vault = self.market.get_vault_by_side(side);
+        let vault = self.market_info.get_vault_by_side(side);
 
         tracing::debug!("base: {max_base_lots}, quote: {max_quote_lots}");
         let oid = random::<u64>();
-        let sig = self
-            .place_order(
-                self.market,
-                self.market_id,
-                side,
-                price_lots,
-                max_base_lots as i64,
-                max_quote_lots as i64,
-                oid,
-                PlaceOrderType::PostOnly,
-                current_time + 86_400,
-                12,
-                ata,
-                vault,
-                SelfTradeBehavior::AbortTransaction,
-            )
-            .await?;
+
+        let ix = Instruction {
+            program_id: openbook_v2::id(),
+            accounts: {
+                anchor_lang::ToAccountMetas::to_account_metas(
+                    &openbook_v2::accounts::PlaceOrder {
+                        open_orders_account: self.open_orders_account,
+                        open_orders_admin: None,
+                        signer: self.owner(),
+                        market: self.market_id,
+                        bids: self.market_info.bids,
+                        asks: self.market_info.asks,
+                        event_heap: self.market_info.event_heap,
+                        oracle_a: self.market_info.oracle_a.into(),
+                        oracle_b: self.market_info.oracle_b.into(),
+                        user_token_account: ata,
+                        market_vault: vault,
+                        token_program: Token::id(),
+                    },
+                    None,
+                )
+            },
+            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrder {
+                args: PlaceOrderArgs {
+                    side,
+                    price_lots,
+                    max_base_lots: max_base_lots as i64,
+                    max_quote_lots_including_fees: max_quote_lots as i64,
+                    client_order_id: oid,
+                    order_type: PlaceOrderType::PostOnly,
+                    expiry_timestamp: current_time + 86_400,
+                    self_trade_behavior: SelfTradeBehavior::AbortTransaction,
+                    limit: 12,
+                },
+            }),
+        };
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        let mut sig = Signature::default(); 
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => {sig = sign},
+            Err(err) => {
+                error!("[*] {err}");
+            }
+        }
+
         // get slot
         let max_slot: Slot = self
             .account_fetcher
             .transaction_max_slot(sig)
             .await?
             .unwrap_or(0);
+
         Ok((oid, sig, max_slot))
     }
-    pub async fn cancel_limit_order(&self, order_id: u128) -> anyhow::Result<Signature> {
-        self.cancel_order(self.market, self.market_id, order_id)
+
+    pub async fn cancel_limit_order(&self, order_id: u128) -> Result<Signature> {
+        let ix = Instruction {
+            program_id: openbook_v2::id(),
+            accounts: {
+                anchor_lang::ToAccountMetas::to_account_metas(
+                    &openbook_v2::accounts::CancelOrder {
+                        open_orders_account: self.open_orders_account,
+                        signer: self.owner(),
+                        market: self.market_id,
+                        bids: self.market_info.bids,
+                        asks: self.market_info.asks,
+                    },
+                    None,
+                )
+            },
+            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CancelOrder {
+                order_id,
+            }),
+        };
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
             .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
+        }
     }
-    pub async fn cancel_all(&self) -> anyhow::Result<Signature> {
-        let r = self
-            .cancel_all_orders(self.market, self.market_id, None, 255)
-            .await;
-        r
+
+    pub async fn cancel_all(&self) -> Result<Signature> {
+        let ix = Instruction {
+            program_id: openbook_v2::id(),
+            accounts: {
+                anchor_lang::ToAccountMetas::to_account_metas(
+                    &openbook_v2::accounts::CancelOrder {
+                        open_orders_account: self.open_orders_account,
+                        signer: self.owner(),
+                        market: self.market_id,
+                        bids: self.market_info.bids,
+                        asks: self.market_info.asks,
+                    },
+                    None,
+                )
+            },
+            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CancelAllOrders {
+                side_option: None,
+                limit: 255,
+            }),
+        };
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
+        }
     }
+
     pub async fn cancel_all_and_place_orders(
         &self,
         bids: Vec<PlaceMultipleOrdersArgs>,
         asks: Vec<PlaceMultipleOrdersArgs>,
-    ) -> anyhow::Result<Signature> {
+    ) -> Result<Signature> {
         let orders_type = PlaceOrderType::PostOnly;
 
-        self.cancel_all_and_place_orders(
-            self.market,
-            self.market_id,
-            self.base_ata.clone(),
-            self.quote_ata.clone(),
-            orders_type,
-            bids,
-            asks,
-            255,
-        )
-        .await
+        let ix = Instruction {
+            program_id: openbook_v2::id(),
+            accounts: {
+                anchor_lang::ToAccountMetas::to_account_metas(
+                    &openbook_v2::accounts::CancelAllAndPlaceOrders {
+                        open_orders_account: self.open_orders_account,
+                        signer: self.owner(),
+                        open_orders_admin: self.market_info.open_orders_admin.into(),
+                        user_quote_account: self.quote_ata,
+                        user_base_account: self.base_ata,
+                        market: self.market_id,
+                        bids: self.market_info.bids,
+                        asks: self.market_info.asks,
+                        event_heap: self.market_info.event_heap,
+                        market_quote_vault: self.market_info.market_quote_vault,
+                        market_base_vault: self.market_info.market_base_vault,
+                        oracle_a: self.market_info.oracle_a.into(),
+                        oracle_b: self.market_info.oracle_b.into(),
+                        token_program: Token::id(),
+                    },
+                    None,
+                )
+            },
+            data: anchor_lang::InstructionData::data(
+                &openbook_v2::instruction::CancelAllAndPlaceOrders {
+                    orders_type,
+                    bids,
+                    asks,
+                    limit: 255,
+                },
+            ),
+        };
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
+        }
     }
 
-    pub async fn find_accounts(
-        &self,
-        owner: &Keypair,
-    ) -> anyhow::Result<Vec<(Pubkey, OpenOrdersAccount)>> {
-        fetch_openbook_accounts(&self.rpc_client, openbook_v2::ID, owner.pubkey()).await
-    }
+    pub async fn find_or_create_account(&self) -> Result<Pubkey> {
+        let program = openbook_v2::id();
 
-    pub async fn find_or_create_account(
-        &self,
-        owner: &Keypair,
-        payer: &Keypair, // pays the SOL for the new account
-        market: Pubkey,
-        openbook_account_name: &str,
-    ) -> anyhow::Result<Pubkey> {
-        let program = openbook_v2::ID;
+        let openbook_account_name = "random";
 
-        let mut openbook_account_tuples =
-            fetch_openbook_accounts(&self.rpc_client, program, owner.pubkey()).await?;
+        let mut openbook_account_tuples = self
+            .rpc_client
+            .fetch_openbook_accounts(program, self.owner())
+            .await?;
         let openbook_account_opt = openbook_account_tuples
             .iter()
             .find(|(_, account)| account.name() == openbook_account_name);
@@ -323,32 +678,26 @@ impl OBClient {
                 Some(tuple) => tuple.1.account_num + 1,
                 None => 0u32,
             };
-            Self::create_open_orders_account(
-                self.rpc_client,
-                market,
-                owner,
-                payer,
-                None,
-                account_num,
-                openbook_account_name,
-            )
-            .await
-            .context("Failed to create account...")?;
+            self.create_open_orders_account(account_num, openbook_account_name)
+                .await
+                .context("Failed to create account...")?;
         }
-        let openbook_account_tuples =
-            fetch_openbook_accounts(&self.rpc_client, program, owner.pubkey()).await?;
+        let openbook_account_tuples = self
+            .rpc_client
+            .fetch_openbook_accounts(program,  self.owner())
+            .await?;
         let index = openbook_account_tuples
             .iter()
             .position(|tuple| tuple.1.name() == openbook_account_name)
             .unwrap();
+
         Ok(openbook_account_tuples[index].0)
     }
 
-    pub async fn create_open_orders_indexer(
-        &self,
-        owner: &Keypair,
-        payer: &Keypair, // pays the SOL for the new account
-    ) -> anyhow::Result<(Pubkey, Signature)> {
+    pub async fn create_open_orders_indexer(&self) -> Result<(Pubkey, Signature)> {
+        let owner = &self.owner;
+        let payer = &self.owner;
+
         let open_orders_indexer = Pubkey::find_program_address(
             &[b"OpenOrdersIndexer".as_ref(), owner.pubkey().as_ref()],
             &openbook_v2::id(),
@@ -371,28 +720,48 @@ impl OBClient {
             ),
         };
 
-        let txsig = TransactionBuilder {
-            instructions: vec![ix],
-            address_lookup_tables: vec![],
-            payer: payer.pubkey(),
-            signers: vec![owner, payer],
-            config: self.rpc_client.transaction_builder_config,
-        }
-        .send_and_confirm(self.rpc_client)
-        .await?;
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
 
-        Ok((open_orders_indexer, txsig))
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok((open_orders_indexer, sign)),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok((open_orders_indexer, Signature::default()))
+            }
+        }
     }
 
     pub async fn create_open_orders_account(
         &self,
-        market: Pubkey,
-        owner: &Keypair,
-        payer: &Keypair, // pays the SOL for the new account
-        delegate: Option<Pubkey>,
         account_num: u32,
         name: &str,
-    ) -> anyhow::Result<(Pubkey, Signature)> {
+    ) -> Result<(Pubkey, Signature)> {
+        let owner = &self.owner;
+        let payer = &self.owner;
+        let market = self.market_id;
+
+        let delegate = None;
+
         let open_orders_indexer = Pubkey::find_program_address(
             &[b"OpenOrdersIndexer".as_ref(), owner.pubkey().as_ref()],
             &openbook_v2::id(),
@@ -430,63 +799,42 @@ impl OBClient {
             ),
         };
 
-        let txsig = TransactionBuilder {
-            instructions: vec![ix],
-            address_lookup_tables: vec![],
-            payer: payer.pubkey(),
-            signers: vec![owner, payer],
-            config: self.rpc_client.transaction_builder_config,
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
+
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok((account, sign)),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok((account, Signature::default()))
+            }
         }
-        .send_and_confirm(self.rpc_client)
-        .await?;
-
-        Ok((account, txsig))
-    }
-
-    /// Conveniently creates a RPC based client
-    pub async fn new_for_existing_account(
-        &self,
-        account: Pubkey,
-        owner: Arc<Keypair>,
-    ) -> anyhow::Result<Self> {
-        let account_fetcher = Arc::new(CachedAccountFetcher::new(Arc::new(RpcAccountFetcher {
-            rpc: self.rpc_client,
-        })));
-        let openbook_account =
-            account_fetcher_fetch_openorders_account(&*account_fetcher, &account).await?;
-        if openbook_account.owner != owner.pubkey() {
-            anyhow::bail!(
-                "bad owner for account: expected {} got {}",
-                openbook_account.owner,
-                owner.pubkey()
-            );
-        }
-
-        Self::new_detail(self.rpc_client, account, owner, account_fetcher)
-    }
-
-    /// Allows control of AccountFetcher and externally created MangoGroupContext
-    pub fn new_detail(
-        client: Client,
-        account: Pubkey,
-        owner: Arc<Keypair>,
-        // future: maybe pass Arc<MangoGroupContext>, so it can be extenally updated?
-        account_fetcher: Arc<dyn AccountFetcherTrait>,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            client,
-            account_fetcher,
-            owner,
-            open_orders_account: account,
-            http_client: reqwest::Client::new(),
-        })
     }
 
     pub fn owner(&self) -> Pubkey {
         self.owner.pubkey()
     }
 
-    pub async fn openorders_account(&self) -> anyhow::Result<OpenOrdersAccount> {
+    pub async fn openorders_account(&self) -> Result<OpenOrdersAccount> {
         account_fetcher_fetch_openorders_account(&*self.account_fetcher, &self.open_orders_account)
             .await
     }
@@ -515,7 +863,7 @@ impl OBClient {
         maker_fee: i64,
         taker_fee: i64,
         time_expiry: i64,
-    ) -> anyhow::Result<Signature> {
+    ) -> Result<Signature> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
             accounts: {
@@ -527,16 +875,8 @@ impl OBClient {
                         asks,
                         event_heap,
                         payer: self.owner(),
-                        market_base_vault:
-                            spl_associated_token_account::get_associated_token_address(
-                                &market_authority,
-                                &base_mint,
-                            ),
-                        market_quote_vault:
-                            spl_associated_token_account::get_associated_token_address(
-                                &market_authority,
-                                &quote_mint,
-                            ),
+                        market_base_vault: self.base_ata,
+                        market_quote_vault: self.quote_ata,
                         base_mint,
                         quote_mint,
                         system_program: solana_sdk::system_program::id(),
@@ -564,62 +904,35 @@ impl OBClient {
                 time_expiry,
             }),
         };
-        self.send_and_confirm_owner_tx(vec![ix]).await
-    }
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn place_order(
-        &self,
-        market: Market,
-        market_address: Pubkey,
-        side: Side,
-        price_lots: i64,
-        max_base_lots: i64,
-        max_quote_lots_including_fees: i64,
-        client_order_id: u64,
-        order_type: PlaceOrderType,
-        expiry_timestamp: u64,
-        limit: u8,
-        user_token_account: Pubkey,
-        market_vault: Pubkey,
-        self_trade_behavior: SelfTradeBehavior,
-    ) -> anyhow::Result<Signature> {
-        let ix = Instruction {
-            program_id: openbook_v2::id(),
-            accounts: {
-                anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::PlaceOrder {
-                        open_orders_account: self.open_orders_account,
-                        open_orders_admin: None,
-                        signer: self.owner(),
-                        market: market_address,
-                        bids: market.bids,
-                        asks: market.asks,
-                        event_heap: market.event_heap,
-                        oracle_a: market.oracle_a.into(),
-                        oracle_b: market.oracle_b.into(),
-                        user_token_account,
-                        market_vault,
-                        token_program: Token::id(),
-                    },
-                    None,
-                )
-            },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrder {
-                args: PlaceOrderArgs {
-                    side,
-                    price_lots,
-                    max_base_lots,
-                    max_quote_lots_including_fees,
-                    client_order_id,
-                    order_type,
-                    expiry_timestamp,
-                    self_trade_behavior,
-                    limit,
-                },
-            }),
-        };
-        self.send_and_confirm_owner_tx(vec![ix]).await
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -639,7 +952,7 @@ impl OBClient {
         user_token_account: Pubkey,
         market_vault: Pubkey,
         self_trade_behavior: SelfTradeBehavior,
-    ) -> anyhow::Result<Signature> {
+    ) -> Result<Signature> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
             accounts: {
@@ -676,112 +989,35 @@ impl OBClient {
                 },
             }),
         };
-        self.send_and_confirm_owner_tx(vec![ix]).await
-    }
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn cancel_order(
-        &self,
-        market: Market,
-        market_address: Pubkey,
-        order_id: u128,
-    ) -> anyhow::Result<Signature> {
-        let ix = Instruction {
-            program_id: openbook_v2::id(),
-            accounts: {
-                anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::CancelOrder {
-                        open_orders_account: self.open_orders_account,
-                        signer: self.owner(),
-                        market: market_address,
-                        bids: market.bids,
-                        asks: market.asks,
-                    },
-                    None,
-                )
-            },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CancelOrder {
-                order_id,
-            }),
-        };
-        self.send_and_confirm_owner_tx(vec![ix]).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn cancel_all_orders(
-        &self,
-        market: Market,
-        market_address: Pubkey,
-        side_option: Option<Side>,
-        limit: u8,
-    ) -> anyhow::Result<Signature> {
-        let ix = Instruction {
-            program_id: openbook_v2::id(),
-            accounts: {
-                anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::CancelOrder {
-                        open_orders_account: self.open_orders_account,
-                        signer: self.owner(),
-                        market: market_address,
-                        bids: market.bids,
-                        asks: market.asks,
-                    },
-                    None,
-                )
-            },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CancelAllOrders {
-                side_option,
-                limit,
-            }),
-        };
-        self.send_and_confirm_owner_tx(vec![ix]).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn cancel_all_and_place_orders(
-        &self,
-        market: Market,
-        market_address: Pubkey,
-        user_base_account: Pubkey,
-        user_quote_account: Pubkey,
-        orders_type: PlaceOrderType,
-        bids: Vec<PlaceMultipleOrdersArgs>,
-        asks: Vec<PlaceMultipleOrdersArgs>,
-        limit: u8,
-    ) -> anyhow::Result<Signature> {
-        let ix = Instruction {
-            program_id: openbook_v2::id(),
-            accounts: {
-                anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::CancelAllAndPlaceOrders {
-                        open_orders_account: self.open_orders_account,
-                        signer: self.owner(),
-                        open_orders_admin: market.open_orders_admin.into(),
-                        user_quote_account: user_quote_account,
-                        user_base_account: user_base_account,
-                        market: market_address,
-                        bids: market.bids,
-                        asks: market.asks,
-                        event_heap: market.event_heap,
-                        market_quote_vault: market.market_quote_vault,
-                        market_base_vault: market.market_base_vault,
-                        oracle_a: market.oracle_a.into(),
-                        oracle_b: market.oracle_b.into(),
-                        token_program: Token::id(),
-                    },
-                    None,
-                )
-            },
-            data: anchor_lang::InstructionData::data(
-                &openbook_v2::instruction::CancelAllAndPlaceOrders {
-                    orders_type,
-                    bids,
-                    asks,
-                    limit,
-                },
-            ),
-        };
-        self.send_and_confirm_owner_tx(vec![ix]).await
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -794,7 +1030,7 @@ impl OBClient {
         user_quote_account: Pubkey,
         market_base_vault: Pubkey,
         market_quote_vault: Pubkey,
-    ) -> anyhow::Result<Signature> {
+    ) -> Result<Signature> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
             accounts: {
@@ -817,44 +1053,35 @@ impl OBClient {
                 quote_amount,
             }),
         };
-        self.send_and_confirm_owner_tx(vec![ix]).await
-    }
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn settle_funds(
-        &self,
-        market: Market,
-        market_address: Pubkey,
-        user_base_account: Pubkey,
-        user_quote_account: Pubkey,
-        market_base_vault: Pubkey,
-        market_quote_vault: Pubkey,
-        referrer_account: Option<Pubkey>,
-    ) -> anyhow::Result<Signature> {
-        let ix = Instruction {
-            program_id: openbook_v2::id(),
-            accounts: {
-                anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::SettleFunds {
-                        owner: self.owner(),
-                        penalty_payer: self.owner(),
-                        open_orders_account: self.open_orders_account,
-                        market: market_address,
-                        market_authority: market.market_authority,
-                        user_base_account,
-                        user_quote_account,
-                        market_base_vault,
-                        market_quote_vault,
-                        referrer_account,
-                        system_program: System::id(),
-                        token_program: Token::id(),
-                    },
-                    None,
-                )
-            },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::SettleFunds {}),
-        };
-        self.send_and_confirm_owner_tx(vec![ix]).await
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -863,7 +1090,7 @@ impl OBClient {
         market: Market,
         market_address: Pubkey,
         limit: usize,
-    ) -> anyhow::Result<Signature> {
+    ) -> Result<Signature> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
             accounts: {
@@ -880,50 +1107,51 @@ impl OBClient {
                 limit,
             }),
         };
-        self.send_and_confirm_owner_tx(vec![ix]).await
-    }
+        // Build and send transaction
+        let recent_hash = self
+            .rpc_client
+            .inner()
+            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &vec![ix],
+            Some(&self.owner()),
+            &[&self.owner],
+            recent_hash,
+        );
 
-    pub async fn send_and_confirm_owner_tx(
-        &self,
-        instructions: Vec<Instruction>,
-    ) -> anyhow::Result<Signature> {
-        TransactionBuilder {
-            instructions,
-            address_lookup_tables: vec![],
-            payer: self.client.fee_payer.pubkey(),
-            signers: vec![&*self.owner, &*self.client.fee_payer],
-            config: self.client.transaction_builder_config,
+        let mut config = RpcSendTransactionConfig::default();
+        config.skip_preflight = true;
+        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
+        match self
+            .rpc_client
+            .inner()
+            .send_transaction_with_config(&txn, config)
+            .await
+        {
+            Ok(sign) => Ok(sign),
+            Err(err) => {
+                error!("[*] {err}");
+                Ok(Signature::default())
+            }
         }
-        .send_and_confirm(&self.client)
-        .await
     }
 
-    pub async fn send_and_confirm_permissionless_tx(
-        &self,
-        instructions: Vec<Instruction>,
-    ) -> anyhow::Result<Signature> {
-        TransactionBuilder {
-            instructions,
-            address_lookup_tables: vec![],
-            payer: self.client.fee_payer.pubkey(),
-            signers: vec![&*self.client.fee_payer],
-            config: self.client.transaction_builder_config,
-        }
-        .send_and_confirm(&self.client)
-        .await
-    }
-
-    pub async fn get_equity(&self) -> anyhow::Result<(f64, f64)> {
+    pub async fn get_equity(&self) -> Result<(f64, f64)> {
         let ba = &self.base_ata;
         let qa = &self.quote_ata;
-        let rpc_client = self.client.rpc_async();
 
-        let bb = rpc_client
+        let bb = self
+            .rpc_client
+            .inner()
             .get_token_account_balance(ba)
             .await?
             .ui_amount
             .unwrap();
-        let qb = rpc_client
+        let qb = self
+            .rpc_client
+            .inner()
             .get_token_account_balance(qa)
             .await?
             .ui_amount
@@ -932,8 +1160,8 @@ impl OBClient {
         Ok((bb, qb))
     }
     pub fn native_price_to_lots_price(&self, limit_price: f64) -> i64 {
-        let base_decimals = self.market.base_decimals as u32;
-        let quote_decimals = self.market.quote_decimals as u32;
+        let base_decimals = self.market_info.base_decimals as u32;
+        let quote_decimals = self.market_info.quote_decimals as u32;
         let base_factor = 10_u64.pow(base_decimals);
         let quote_factor = 10_u64.pow(quote_decimals);
         let price_factor = (base_factor / quote_factor) as f64;
@@ -942,13 +1170,13 @@ impl OBClient {
     }
 
     pub fn get_base_size_from_quote(&self, quote_size_usd: u64, limit_price: f64) -> u64 {
-        let base_decimals = self.market.base_decimals as u32;
+        let base_decimals = self.market_info.base_decimals as u32;
         let base_factor = 10_u64.pow(base_decimals) as f64;
         let base_size = ((quote_size_usd as f64 / limit_price) * base_factor) as u64;
         base_size
     }
 
-    pub async fn load_bids_asks(&self) -> anyhow::Result<(Vec<OpenOrderNode>, BestQuotes)> {
+    pub async fn load_bids_asks_info(&self) -> Result<(Vec<OpenOrderNode>, BestQuotes)> {
         let mut best_quotes = BestQuotes {
             highest_bid: 0.,
             lowest_ask: 0.,
@@ -958,8 +1186,8 @@ impl OBClient {
         let orders_key = self.open_orders_account;
 
         let bids_book_side = self
-            .client
-            .rpc_anchor_account::<BookSide>(&self.market.bids)
+            .rpc_client
+            .fetch_anchor_account::<BookSide>(&self.market_info.bids)
             .await?;
 
         for (i, bid_book_side) in bids_book_side.iter_valid(0, None).enumerate() {
@@ -969,7 +1197,7 @@ impl OBClient {
             let owner_address = node.owner;
             let order_id = node.client_order_id;
             let lot_price = bid_book_side.price_lots;
-            let native_price = self.market.lot_to_native_price(lot_price);
+            let native_price = self.market_info.lot_to_native_price(lot_price);
             let ui_price: f64 = I80F48::to_num::<f64>(native_price) * 1000.;
             let ui_amount = node.quantity as f64 / 1e1;
             if i == 0 {
@@ -988,8 +1216,8 @@ impl OBClient {
         }
 
         let asks_book_side = self
-            .client
-            .rpc_anchor_account::<BookSide>(&self.market.asks)
+            .rpc_client
+            .fetch_anchor_account::<BookSide>(&self.market_info.asks)
             .await
             .unwrap();
 
@@ -1000,7 +1228,7 @@ impl OBClient {
             let owner_address = node.owner;
             let order_id = node.client_order_id;
             let lot_price = ask_book_side.price_lots;
-            let native_price = self.market.lot_to_native_price(lot_price);
+            let native_price = self.market_info.lot_to_native_price(lot_price);
             let ui_price: f64 = I80F48::to_num::<f64>(native_price) * 1000.;
             if i == 0 {
                 best_quotes.lowest_ask = ui_price;
@@ -1021,7 +1249,7 @@ impl OBClient {
         Ok((open_orders, best_quotes))
     }
 
-    pub async fn load_oo_state(&self) -> anyhow::Result<OpenOrderState> {
+    pub async fn load_oo_state(&self) -> Result<OpenOrderState> {
         let result = self.load_oo_balances().await?;
         println!("got (jlp, usdc) bals: {:?}", result);
 
@@ -1031,26 +1259,26 @@ impl OBClient {
         })
     }
 
-    pub async fn load_oo_balances(&self) -> anyhow::Result<(f64, f64)> {
+    pub async fn load_oo_balances(&self) -> Result<(f64, f64)> {
         let open_orders_account = self.openorders_account().await?;
         let asks_native_price = self
-            .market
+            .market_info
             .lot_to_native_price(open_orders_account.position.asks_base_lots);
         let asks_base_total: f64 = I80F48::to_num::<f64>(asks_native_price) * 1000.;
 
         let bids_native_price = self
-            .market
+            .market_info
             .lot_to_native_price(open_orders_account.position.bids_base_lots);
         let bids_base_total: f64 = I80F48::to_num::<f64>(bids_native_price) * 1000.;
 
         Ok((bids_base_total, asks_base_total))
     }
 
-    pub async fn load_open_orders(&self) -> anyhow::Result<Vec<OpenOrderNode>> {
+    pub async fn load_open_orders(&self) -> Result<Vec<OpenOrderNode>> {
         let open_orders_account = self.openorders_account().await?;
         let mut open_orders = Vec::new();
         for order in open_orders_account.all_orders_in_use() {
-            let native_price = self.market.lot_to_native_price(order.locked_price);
+            let native_price = self.market_info.lot_to_native_price(order.locked_price);
             let ui_price: f64 = I80F48::to_num::<f64>(native_price) * 1000.;
             open_orders.push(OpenOrderNode {
                 is_buy: false, // Order object doesn't contain is_buy
@@ -1065,44 +1293,17 @@ impl OBClient {
         Ok(open_orders)
     }
 
-    // each keypair must have exactly one indexer before it can create open orders accounts
-    #[allow(dead_code)]
-    async fn create_indexer(&self) -> anyhow::Result<(Pubkey, Signature)> {
-        let r =
-            OBClient::create_open_orders_indexer(&self.client, &self.keypair, &self.keypair).await;
-        println!("Created indexer {:?}", r);
-        r
-    }
-
-    // you can create multiple oo accounts per indexer, each with a dedicated market id
-    #[allow(dead_code)]
-    async fn create_open_orders_acc(&self) -> anyhow::Result<(Pubkey, Signature)> {
-        let result = OBClient::create_open_orders_account(
-            &self.client,
-            self.market_id,
-            &self.keypair,
-            &self.keypair,
-            None,
-            1,
-            "somename1",
-        )
-        .await;
-        println!("got result: {:?}", result);
-        result
-    }
-
-    pub async fn get_token_balance(&self, ata: &Pubkey) -> anyhow::Result<f64> {
-        let rpc_client = self.client.rpc_async();
-        let r = rpc_client.get_token_account_balance(&ata).await?;
+    pub async fn get_token_balance(&self, ata: &Pubkey) -> Result<f64> {
+        let r = self.rpc_client.inner().get_token_account_balance(&ata).await?;
         Ok(r.ui_amount.unwrap())
     }
 
-    pub async fn get_sol_usdc_total(&self) -> anyhow::Result<AtaBalances> {
+    pub async fn get_sol_usdc_total(&self) -> Result<AtaBalances> {
         let sol_ata = self.base_ata.clone();
         let usdc_ata = self.quote_ata.clone();
         let sol_balance = self.get_token_balance(&sol_ata).await?;
         let usdc_balance = self.get_token_balance(&usdc_ata).await?;
-        let price = get_sol_price().await?;
+        let price = get_sol_price(&self.market_info.quote_mint.to_string()).await?;
 
         Ok(AtaBalances {
             usdc_balance,
@@ -1142,7 +1343,7 @@ impl<'a> TransactionBuilder<'a> {
     pub async fn transaction(
         self,
         rpc: &RpcClientAsync,
-    ) -> anyhow::Result<solana_sdk::transaction::VersionedTransaction> {
+    ) -> Result<solana_sdk::transaction::VersionedTransaction> {
         let latest_blockhash = rpc.get_latest_blockhash().await?;
         self.transaction_with_blockhash(latest_blockhash)
     }
@@ -1150,7 +1351,7 @@ impl<'a> TransactionBuilder<'a> {
     pub fn transaction_with_blockhash(
         mut self,
         blockhash: Hash,
-    ) -> anyhow::Result<solana_sdk::transaction::VersionedTransaction> {
+    ) -> Result<solana_sdk::transaction::VersionedTransaction> {
         if let Some(prio_price) = self.config.prioritization_micro_lamports {
             self.instructions.insert(
                 0,
@@ -1177,12 +1378,11 @@ impl<'a> TransactionBuilder<'a> {
     }
 }
 
-pub async fn get_sol_price() -> anyhow::Result<f64> {
-    const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
+pub async fn get_sol_price(quote_mint: &str) -> Result<f64> {
     let base_url = "https://price.jup.ag/v4/price?ids=";
-    let url = format!("{base_url}{SOL_MINT}");
+    let url = format!("{base_url}{quote_mint}");
     let result = reqwest::get(url).await?;
     let prices = result.json::<PriceData>().await?;
-    let sol_usdc_price = prices.data.get(SOL_MINT).unwrap().price;
+    let sol_usdc_price = prices.data.get(quote_mint).unwrap().price;
     Ok(sol_usdc_price)
 }

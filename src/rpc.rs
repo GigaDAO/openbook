@@ -10,11 +10,21 @@ use solana_client::{
     client_error::ClientError,
     nonblocking::rpc_client::RpcClient,
     rpc_client::GetConfirmedSignaturesForAddress2Config,
-    rpc_config::{RpcAccountInfoConfig, RpcTransactionConfig},
+    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcTransactionConfig},
+    rpc_filter::{Memcmp, RpcFilterType},
     rpc_response::RpcConfirmedTransactionStatusWithSignature,
 };
 use solana_sdk::{account::Account, pubkey::Pubkey, signature::Signature};
 use solana_transaction_status::{EncodedConfirmedTransactionWithStatusMeta, UiTransactionEncoding};
+
+#[cfg(feature = "v2")]
+use anchor_lang::{AccountDeserialize, Discriminator};
+
+#[cfg(feature = "v2")]
+use openbook_v2::state::OpenOrdersAccount;
+
+#[cfg(feature = "v2")]
+use solana_account_decoder::UiAccountEncoding;
 
 /// Wrapper type for RpcClient providing additional functionality and enabling Debug trait implementation.
 ///
@@ -212,6 +222,71 @@ impl Rpc {
         .retry(&ExponentialBuilder::default())
         .await?
         .value)
+    }
+
+    #[cfg(feature = "v2")]
+    pub async fn fetch_anchor_account<T: AccountDeserialize>(
+        &self,
+        address: &Pubkey,
+    ) -> anyhow::Result<T> {
+        let account = self.inner().get_account(address).await?;
+        Ok(T::try_deserialize(&mut (&account.data as &[u8]))?)
+    }
+
+    #[cfg(feature = "v2")]
+    pub async fn fetch_openbook_accounts(
+        &self,
+        program: Pubkey,
+        owner: Pubkey,
+    ) -> anyhow::Result<Vec<(Pubkey, OpenOrdersAccount)>> {
+        let config = RpcProgramAccountsConfig {
+            filters: Some(vec![
+                RpcFilterType::Memcmp(Memcmp::new_raw_bytes(
+                    0,
+                    OpenOrdersAccount::discriminator().to_vec(),
+                )),
+                RpcFilterType::Memcmp(Memcmp::new_raw_bytes(8, owner.to_bytes().to_vec())),
+            ]),
+            account_config: RpcAccountInfoConfig {
+                encoding: Some(UiAccountEncoding::Base64),
+                ..RpcAccountInfoConfig::default()
+            },
+            ..RpcProgramAccountsConfig::default()
+        };
+        self.inner()
+            .get_program_accounts_with_config(&program, config)
+            .await?
+            .into_iter()
+            .map(|(key, account)| {
+                Ok((
+                    key,
+                    OpenOrdersAccount::try_deserialize(&mut (&account.data as &[u8]))?,
+                ))
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "v2")]
+    pub async fn _fetch_anchor_accounts<T: AccountDeserialize + Discriminator>(
+        &self,
+        program: Pubkey,
+    ) -> anyhow::Result<Vec<(Pubkey, T)>> {
+        let account_type_filter =
+            RpcFilterType::Memcmp(Memcmp::new_raw_bytes(0, T::discriminator().to_vec()));
+        let config = RpcProgramAccountsConfig {
+            filters: Some([vec![account_type_filter]].concat()),
+            account_config: RpcAccountInfoConfig {
+                encoding: Some(UiAccountEncoding::Base64),
+                ..RpcAccountInfoConfig::default()
+            },
+            ..RpcProgramAccountsConfig::default()
+        };
+        self.inner()
+            .get_program_accounts_with_config(&program, config)
+            .await?
+            .into_iter()
+            .map(|(key, account)| Ok((key, T::try_deserialize(&mut (&account.data as &[u8]))?)))
+            .collect()
     }
 }
 

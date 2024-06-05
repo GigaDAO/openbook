@@ -16,6 +16,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
 
+#[async_trait::async_trait]
 pub trait AccountFetcherTrait: Sync + Send {
     async fn fetch_raw_account(&self, address: &Pubkey) -> anyhow::Result<AccountSharedData>;
     async fn fetch_raw_account_lookup_table(
@@ -58,6 +59,7 @@ pub struct RpcAccountFetcher {
     pub rpc: RpcClientAsync,
 }
 
+#[async_trait::async_trait]
 impl AccountFetcherTrait for RpcAccountFetcher {
     async fn fetch_raw_account(&self, address: &Pubkey) -> anyhow::Result<AccountSharedData> {
         self.rpc
@@ -181,6 +183,7 @@ impl<T: AccountFetcherTrait> CachedAccountFetcher<T> {
     }
 }
 
+#[async_trait::async_trait]
 impl<T: AccountFetcherTrait + 'static> AccountFetcherTrait for CachedAccountFetcher<T> {
     #[allow(clippy::clone_on_copy)]
     async fn fetch_raw_account(&self, address: &Pubkey) -> anyhow::Result<AccountSharedData> {

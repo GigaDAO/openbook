@@ -17,7 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         use openbook::tokens_and_markets::{DexVersion, Token};
         use openbook::tui::run_tui;
         #[cfg(feature = "v1")]
-        use openbook::v1::{ob_client::OBClient, orders::OrderReturnType};
+        use openbook::v1::{ob_client::OBClient as OBV1Client, orders::OrderReturnType};
+        #[cfg(feature = "v2")]
+        use openbook::v2::ob_client::OBClient as OBV2Client;
         use solana_cli_output::display::println_transaction;
         use tracing_subscriber::{filter, fmt};
 
@@ -37,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut ob_client;
 
         if args.command == Some(Commands::Tui) {
-            ob_client = OBClient::new(
+            ob_client = OBV1Client::new(
                 CommitmentConfig::confirmed(),
                 DexVersion::default(),
                 Token::JLP,
@@ -47,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         } else {
-            ob_client = OBClient::new(
+            ob_client = OBV1Client::new(
                 CommitmentConfig::confirmed(),
                 DexVersion::default(),
                 Token::JLP,
@@ -57,6 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
+
+        // Todo: ob v2 client 
         match args.command {
             Some(Commands::Info(_)) => {
                 info!("\n[*] Market Info: {:?}", ob_client);
