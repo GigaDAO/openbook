@@ -6,8 +6,8 @@ use crate::{
     utils::{create_account_info_from_account, u64_slice_to_pubkey},
 };
 use anyhow::{Error, Result};
-use borsh::{BorshDeserialize, BorshSerialize};
 use openbook_dex::state::{gen_vault_signer_key, MarketState};
+use serde::{Deserialize, Serialize};
 use solana_sdk::{
     pubkey::Pubkey,
     sysvar::slot_history::{AccountInfo, ProgramError},
@@ -16,7 +16,7 @@ use solana_sdk::{
 use std::fmt::{Debug, Formatter};
 
 /// Struct representing a market with associated state and information.
-#[derive(Clone, Default, BorshDeserialize, BorshSerialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub struct Market {
     /// The public key of the program associated with the market.
     pub program_id: Pubkey,

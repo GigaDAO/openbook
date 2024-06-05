@@ -3,7 +3,7 @@
 use crate::rpc::Rpc;
 use crate::traits::OpenOrdersT;
 use anyhow::{Error, Result};
-use borsh::{BorshDeserialize, BorshSerialize};
+use serde::{Deserialize, Serialize};
 use solana_client::rpc_config::RpcSendTransactionConfig;
 use solana_sdk::{
     compute_budget::ComputeBudgetInstruction,
@@ -16,7 +16,7 @@ use solana_sdk::{
 use std::fmt::{Debug, Formatter};
 use tracing::{debug, error};
 
-#[derive(Clone, Default, BorshDeserialize, BorshSerialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct OpenOrders {
     /// The public key of the open orders account.
     pub oo_key: Pubkey,

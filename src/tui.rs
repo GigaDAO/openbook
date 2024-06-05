@@ -26,11 +26,11 @@ use tui_input::Input;
 
 use crate::commitment_config::CommitmentConfig;
 use crate::matching::Side;
-use crate::ob_client::OBClient;
-use crate::orders::OrderReturnType;
 use crate::rpc::Rpc;
 use crate::rpc_client::RpcClient;
 use crate::utils::read_keypair;
+#[cfg(feature = "v1")]
+use crate::v1::{ob_client::OBClient, orders::OrderReturnType};
 
 use crate::tokens_and_markets::{DexVersion, Token};
 use anyhow::{Error, Result};

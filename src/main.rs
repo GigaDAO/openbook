@@ -14,10 +14,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         use openbook::cli::{Cli, Commands};
         use openbook::commitment_config::CommitmentConfig;
         use openbook::matching::Side;
-        use openbook::ob_client::OBClient;
-        use openbook::orders::OrderReturnType;
         use openbook::tokens_and_markets::{DexVersion, Token};
         use openbook::tui::run_tui;
+        #[cfg(feature = "v1")]
+        use openbook::v1::{ob_client::OBClient, orders::OrderReturnType};
         use solana_cli_output::display::println_transaction;
         use tracing_subscriber::{filter, fmt};
 
@@ -57,7 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
-
         match args.command {
             Some(Commands::Info(_)) => {
                 info!("\n[*] Market Info: {:?}", ob_client);

@@ -11,9 +11,11 @@ pub enum DexVersion {
     DepDexV1,
     /// DEX Version 2
     DexV2,
-    /// DEX Version 3
+    /// OpenBook v1 Dex, aka srm
     #[default]
     DexV3,
+    /// OpenBook v2 Dex, aka opnb
+    DexV4,
 }
 
 /// Represents tokens associated with markets on the Solana blockchain.
@@ -51,7 +53,7 @@ pub static SPL_TOKEN_ID: &'static str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623V
 ///
 /// This static array contains tuples where the first element represents the program ID in string format,
 /// and the second element represents the associated layout version.
-pub static PROGRAM_LAYOUT_VERSIONS: [(&str, DexVersion); 4] = [
+pub static PROGRAM_LAYOUT_VERSIONS: [(&str, DexVersion); 5] = [
     (
         "4ckmDgGdxQoPDLUkDT3vHgSAkzA3QRdNq5ywwY4sUSJn",
         DexVersion::DepDexV0,
@@ -67,6 +69,10 @@ pub static PROGRAM_LAYOUT_VERSIONS: [(&str, DexVersion); 4] = [
     (
         "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX",
         DexVersion::DexV3,
+    ),
+    (
+        "opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb",
+        DexVersion::DexV4,
     ),
 ];
 

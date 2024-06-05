@@ -1,13 +1,15 @@
-use crate::{
+use crate::v1::{
     market::Market,
     orders::{OpenOrders, OpenOrdersCacheEntry, OrderReturnType},
+};
+use crate::{
     rpc::Rpc,
     rpc_client::RpcClient,
     tokens_and_markets::{DexVersion, Token, SPL_TOKEN_ID},
-    traits::MarketInfo,
-    traits::OpenOrdersT,
+    traits::{MarketInfo, OpenOrdersT},
     utils::{create_account_info_from_account, get_unix_secs, read_keypair, u64_slice_to_pubkey},
 };
+
 use anyhow::{Error, Result};
 use openbook_dex::{
     critbit::Slab,
@@ -38,7 +40,7 @@ use std::{
 
 use tracing::{debug, error};
 
-/// OpenBook Client to interact with the OpenBook market and perform actions.
+/// OpenBook v1 Client to interact with the OpenBook market and perform actions.
 pub struct OBClient {
     /// The keypair of the owner used for signing transactions related to the market.
     pub owner: Keypair,
@@ -94,7 +96,7 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -375,7 +377,7 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -409,7 +411,7 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -454,7 +456,7 @@ impl OBClient {
     /// use openbook::matching::Side;
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -627,7 +629,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -740,7 +742,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -830,7 +832,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -906,7 +908,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1061,7 +1063,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1194,7 +1196,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1319,7 +1321,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1427,7 +1429,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1490,7 +1492,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1553,7 +1555,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1598,7 +1600,7 @@ impl OBClient {
     /// ```rust
     /// use openbook::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
@@ -1645,7 +1647,7 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
+    /// use openbook::v1::ob_client::OBClient;
     /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]

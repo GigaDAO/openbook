@@ -1,11 +1,12 @@
 #![allow(async_fn_in_trait)]
 
+use crate::v1::{market::Market, orders::OpenOrders};
+
 use crate::{
-    market::Market,
-    orders::OpenOrders,
     rpc::Rpc,
     tokens_and_markets::{DexVersion, Token},
 };
+
 use anyhow::Error;
 use solana_sdk::{pubkey::Pubkey, signer::keypair::Keypair, sysvar::slot_history::AccountInfo};
 use std::fmt::Debug;
