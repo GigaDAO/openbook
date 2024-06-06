@@ -1,7 +1,6 @@
 //! This module contains structs and functions related to the openbook market.
 use crate::{
     rpc::Rpc,
-    tokens_and_markets::{get_market_name, get_program_id, DexVersion, Token},
     traits::MarketInfo,
     utils::{create_account_info_from_account, u64_slice_to_pubkey},
 };
@@ -127,10 +126,9 @@ impl MarketInfo for Market {
     ///
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
-    /// use openbook::market::Market;
+    /// use openbook::v1::market::Market;
     /// use crate::openbook::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -138,7 +136,23 @@ impl MarketInfo for Market {
     ///
     ///     let rpc_client = Rpc::new(RpcClient::new(rpc_url));
     ///
-    ///     let market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, true).await?;
+    ///     let program_id = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let base_mint = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let market = Market::new(rpc_client, program_id, market_id, base_mint, quote_mint, true).await?;
     ///
     ///     println!("Initialized Market: {:?}", market);
     ///
@@ -147,23 +161,21 @@ impl MarketInfo for Market {
     /// ```
     async fn new(
         rpc_client: Rpc,
-        program_version: DexVersion,
-        base_mint: Token,
-        quote_mint: Token,
+        program_id: Pubkey,
+        market_id: Pubkey,
+        base_mint: Pubkey,
+        quote_mint: Pubkey,
         load: bool,
     ) -> Result<Self, Error> {
-        let (market_address, base_mint, quote_mint, program_id) =
-            Self::parse_market_params(program_version, base_mint, quote_mint)?;
-
         let mut market = Self {
             program_id,
-            market_address,
             coin_decimals: 9,
             pc_decimals: 6,
             coin_lot_size: 1_000_000,
             pc_lot_size: 1,
             quote_mint,
             base_mint,
+            market_address: market_id,
             bids_address: Default::default(),
             asks_address: Default::default(),
             coin_vault: Default::default(),
@@ -203,10 +215,9 @@ impl MarketInfo for Market {
     ///
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
-    /// use openbook::market::Market;
+    /// use openbook::v1::market::Market;
     /// use crate::openbook::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -214,7 +225,23 @@ impl MarketInfo for Market {
     ///
     ///     let rpc_client = Rpc::new(RpcClient::new(rpc_url));
     ///
-    ///     let mut market = Market::new(rpc_client.clone(), DexVersion::default(), Token::JLP, Token::USDC, true).await?;
+    ///     let program_id = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let base_mint = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let mut market = Market::new(rpc_client.clone(), program_id, market_id, base_mint, quote_mint, true).await?;
     ///
     ///     market.load(&rpc_client.clone()).await?;
     ///
@@ -266,11 +293,10 @@ impl MarketInfo for Market {
     ///
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
-    /// use openbook::market::Market;
+    /// use openbook::v1::market::Market;
     /// use crate::openbook::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
     /// use openbook::utils::create_account_info_from_account;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -278,7 +304,23 @@ impl MarketInfo for Market {
     ///
     ///     let rpc_client = Rpc::new(RpcClient::new(rpc_url));
     ///
-    ///     let mut market = Market::new(rpc_client.clone(), DexVersion::default(), Token::JLP, Token::USDC, true).await?;
+    ///     let program_id = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let base_mint = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let mut market = Market::new(rpc_client.clone(), program_id, market_id, base_mint, quote_mint, true).await?;
     ///
     ///     let mut account = rpc_client.clone().inner().get_account(&market.market_address).await?;
     ///     let program_id_binding = market.program_id;
@@ -334,54 +376,6 @@ impl MarketInfo for Market {
         Ok(())
     }
 
-    /// Parses market parameters.
-    ///
-    /// # Arguments
-    ///
-    /// * `program_version` - Program dex version representing the market.
-    /// * `base_mint` - Base mint symbol.
-    /// * `quote_mint` - Quote mint symbol.
-    ///
-    /// # Returns
-    ///
-    /// Returns a tuple containing the parsed market parameters:
-    /// `(market_address, base_mint, quote_mint, program_id)`.
-    ///
-    /// # Errors
-    ///
-    /// This function returns an error if parsing the market parameters fails,
-    /// such as invalid mint symbols or program versions.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use openbook::market::Market;
-    /// use crate::openbook::traits::MarketInfo;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
-    ///
-    ///     let (market_address, base_mint, quote_mint, program_id) =
-    ///         Market::parse_market_params(DexVersion::default(), Token::JLP, Token::USDC)?;
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
-    fn parse_market_params(
-        program_version: DexVersion,
-        base_mint: Token,
-        quote_mint: Token,
-    ) -> Result<(Pubkey, Pubkey, Pubkey, Pubkey), Error> {
-        // Parse market parameters and obtain relevant Pubkey values.
-        let market_address = get_market_name(base_mint).0.parse()?;
-        let quote_mint = get_market_name(quote_mint).1.parse()?;
-        let base_mint = get_market_name(base_mint).1.parse()?;
-        let program_id = get_program_id(program_version).parse()?;
-        Ok((market_address, base_mint, quote_mint, program_id))
-    }
-
     /// Initializes the vault signer key.
     ///
     /// # Returns
@@ -397,10 +391,9 @@ impl MarketInfo for Market {
     ///
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
-    /// use openbook::market::Market;
+    /// use openbook::v1::market::Market;
     /// use crate::openbook::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -408,7 +401,23 @@ impl MarketInfo for Market {
     ///
     ///     let rpc_client = Rpc::new(RpcClient::new(rpc_url));
     ///
-    ///     let mut market = Market::new(rpc_client, DexVersion::default(), Token::JLP, Token::USDC, true).await?;
+    ///     let program_id = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let base_mint = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    ///         .parse()
+    ///         .unwrap();
+    ///
+    ///     let mut market = Market::new(rpc_client, program_id, market_id, base_mint, quote_mint, true).await?;
     ///
     ///     market.init_vault_signer_key().await?;
     ///

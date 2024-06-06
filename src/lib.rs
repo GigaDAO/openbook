@@ -4,7 +4,6 @@
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod rpc;
-pub mod tokens_and_markets;
 pub mod traits;
 #[cfg(feature = "cli")]
 pub mod tui;

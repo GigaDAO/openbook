@@ -12,8 +12,7 @@ use solana_client::{
     client_error::ClientError,
     nonblocking::rpc_client::RpcClient,
     rpc_client::GetConfirmedSignaturesForAddress2Config,
-    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcTransactionConfig},
-    rpc_filter::{Memcmp, RpcFilterType},
+    rpc_config::{RpcAccountInfoConfig, RpcTransactionConfig},
     rpc_response::RpcConfirmedTransactionStatusWithSignature,
 };
 use solana_rpc_client_api::client_error::ErrorKind;
@@ -29,6 +28,12 @@ use anchor_lang::{AccountDeserialize, Discriminator};
 
 #[cfg(feature = "v2")]
 use openbook_v2::state::OpenOrdersAccount;
+
+#[cfg(feature = "v2")]
+use solana_client::{
+    rpc_config::RpcProgramAccountsConfig,
+    rpc_filter::{Memcmp, RpcFilterType},
+};
 
 #[cfg(feature = "v2")]
 use solana_account_decoder::UiAccountEncoding;
@@ -139,7 +144,7 @@ impl Rpc {
     /// ```rust
     /// use openbook::signature::Signature;
     /// use openbook::rpc_client::RpcClient;
-    /// use openbook::tokens_and_markets::SPL_TOKEN_ID;
+    /// use openbook::v1::ob_client::SPL_TOKEN_ID;
     /// use openbook::rpc::Rpc;
     ///
     /// #[tokio::main]
@@ -321,7 +326,7 @@ impl Rpc {
                 &txn,
                 RpcSendTransactionConfig {
                     skip_preflight: false,
-                    max_retries: Some(3),
+                    max_retries: None,
                     preflight_commitment: Some(self.inner().commitment().commitment),
                     encoding: None,
                     min_context_slot: None,
@@ -338,7 +343,7 @@ impl Rpc {
                         // Hack: We have received a signature. We assume it is confirmed due to the Solana network/Crank delay to get confirmation.
                         confirmed = true;
                         sig = signature;
-                        tracing::warn!("transaction confirmed: {:?}", signature);
+                        tracing::debug!("transaction confirmed: {:?}", signature);
                     }
                     Err(err) => {
                         match err.kind() {

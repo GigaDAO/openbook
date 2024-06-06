@@ -2953,7 +2953,6 @@ dependencies = [
  "solana-transaction-status",
  "spl-associated-token-account",
  "strum",
- "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",

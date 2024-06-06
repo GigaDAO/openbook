@@ -42,12 +42,11 @@ unicode-width = { version = "0.1.12", optional = true }
 strum = { version = "0.26.2", optional = true }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["std"], optional = true }
-thiserror = "1.0.61"
 
 # v2 deps
 openbook-v2 = {git = "https://github.com/openbook-dex/openbook-v2.git", features = ["client"], optional = true }
-itertools = { version = "0.13.0", optional = true }
 reqwest = { version = "0.11.27", optional = true }
+itertools = { version = "0.13.0", optional = true }
 anchor-client = { version = "0.29.0", optional = true }
 anchor-lang = { version = "0.29.0", optional = true }
 anchor-spl = { version = "0.29.0", optional = true }
@@ -55,12 +54,12 @@ fixed = { git = "https://github.com/blockworks-foundation/fixed.git", branch = "
 pyth-sdk-solana = { version = "0.10.1", optional = true }
 solana-account-decoder = { version = "=1.17.34", optional = true }
 async-once-cell = {version = "0.4.2", features = ["unpin"], optional = true}
-async-trait = "0.1.80"
+async-trait = {version = "0.1.80", optional = true}
 
 [features]
-default = ["v1"]
+default = []
 v1 = ["openbook_dex", ]
-v2 = ["openbook-v2", "itertools", "reqwest", "anchor-client", "anchor-lang", "anchor-spl", "fixed", "pyth-sdk-solana", "solana-account-decoder", "async-once-cell"]
+v2 = ["openbook-v2", "reqwest", "anchor-client", "anchor-lang", "anchor-spl", "fixed", "pyth-sdk-solana", "solana-account-decoder", "async-trait", "async-once-cell", "itertools"]
 cli = ["clap", "solana-cli-output", "ratatui", "tui-input", "serde", "crossterm", "unicode-width", "strum", "tracing-subscriber"]
 
 [dev-dependencies]

@@ -12,7 +12,10 @@ use openbook_v2::{
     PlaceMultipleOrdersArgs, PlaceOrderArgs, PlaceOrderPeggedArgs,
 };
 
-use crate::v2::account_fetcher::*;
+use crate::v2::account_fetcher::{
+    account_fetcher_fetch_openorders_account, AccountFetcherTrait, CachedAccountFetcher,
+    RpcAccountFetcher,
+};
 use crate::v2::context::MarketContext;
 use spl_associated_token_account::get_associated_token_address;
 
@@ -103,44 +106,6 @@ pub struct OBClient {
 }
 
 impl OBClient {
-    /// Initializes a new instance of the `OBClient` struct, representing an OpenBook client.
-    ///
-    /// This method initializes the `OBClient` struct, containing information about the requested market,
-    /// having the base and quote mints. It fetches and stores all data about this OpenBook market.
-    /// Additionally, it includes information about the account associated with the wallet on the OpenBook market
-    /// (e.g., open orders, bids, asks, etc.).
-    ///
-    /// # Arguments
-    ///
-    /// * `commitment` - Commitment configuration for transactions.
-    /// * `program_version` - Program dex version representing the market.
-    /// * `base_mint` - Base mint symbol.
-    /// * `quote_mint` - Quote mint symbol.
-    /// * `load` - Boolean indicating whether to load market data immediately.
-    /// * `cache_ts` - Timestamp for caching current open orders.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new instance of the `OBClient` struct initialized with the provided parameters.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::v1::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let commitment = CommitmentConfig::confirmed();
-    ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
-    ///
-    ///     println!("Initialized OBClient: {:?}", ob_client);
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
     pub async fn new(
         commitment: CommitmentConfig,
         market_id: Pubkey,

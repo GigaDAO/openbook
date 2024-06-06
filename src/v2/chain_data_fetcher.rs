@@ -2,26 +2,25 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::v2::chain_data::*;
-
-use anchor_lang::Discriminator;
-
-use anchor_lang::AccountDeserialize;
-use openbook_v2::accounts_zerocopy::LoadZeroCopy;
-use openbook_v2::state::OpenOrdersAccount;
-
 use anyhow::Context;
 
-use crate::v2::account_fetcher::AccountFetcherTrait;
-use solana_client::nonblocking::rpc_client::RpcClient as RpcClientAsync;
-use solana_sdk::account::{AccountSharedData, ReadableAccount};
-use solana_sdk::clock::Slot;
-use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::Signature;
+use anchor_lang::{AccountDeserialize, Discriminator};
+
+use openbook_v2::{accounts_zerocopy::LoadZeroCopy, state::OpenOrdersAccount};
+
+use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_sdk::{
+    account::{AccountSharedData, ReadableAccount},
+    clock::Slot,
+    pubkey::Pubkey,
+    signature::Signature,
+};
+
+use crate::v2::{account_fetcher::AccountFetcherTrait, chain_data::*};
 
 pub struct AccountFetcher {
     pub chain_data: Arc<RwLock<ChainData>>,
-    pub rpc: RpcClientAsync,
+    pub rpc: RpcClient,
 }
 
 impl AccountFetcher {

@@ -149,25 +149,30 @@ openbook consume-permissioned --limit 2
 
 ## 💻 Usage as Dependency
 
+### OpenBook V1
+
 ```toml
 [dependencies]
-openbook = "0.0.12"
+openbook = { version = "0.1.0" , features = ["v1"] } 
 ```
 
 ```rust
-use openbook::orders::OrderReturnType;
-use openbook::commitment_config::CommitmentConfig;
-use openbook::ob_client::OBClient;
-use openbook::tokens_and_markets::{DexVersion, Token};
+use openbook::v1::orders::OrderReturnType;
+use openbook::v1::ob_client::OBClient;
 use openbook::matching::Side;
+use openbook::commitment_config::CommitmentConfig;
 use openbook::pubkey::Pubkey;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let commitment = CommitmentConfig::confirmed();
 
-    let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
-    println!("Initialized OpenBook Client: {:?}", ob_client);
+    let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+        .parse()
+        .unwrap();
+
+    let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
+    println!("Initialized OpenBook V1 Client: {:?}", ob_client);
 
     println!("[*] Place Limit Order");
     if let Some(ord_ret_type) = ob_client

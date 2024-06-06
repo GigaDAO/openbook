@@ -1,11 +1,9 @@
 #![allow(async_fn_in_trait)]
 
+#[cfg(feature = "v1")]
 use crate::v1::{market::Market, orders::OpenOrders};
 
-use crate::{
-    rpc::Rpc,
-    tokens_and_markets::{DexVersion, Token},
-};
+use crate::rpc::Rpc;
 
 use anyhow::Error;
 use solana_sdk::{pubkey::Pubkey, signer::keypair::Keypair, sysvar::slot_history::AccountInfo};
@@ -16,9 +14,10 @@ pub trait MarketInfo: Debug {
     /// Initializes a new instance of the `Market` struct.
     async fn new(
         rpc_client: Rpc,
-        program_version: DexVersion,
-        base_mint: Token,
-        quote_mint: Token,
+        program_id: Pubkey,
+        market_id: Pubkey,
+        base_mint: Pubkey,
+        quote_mint: Pubkey,
         load: bool,
     ) -> Result<Market, Error>;
 
@@ -28,13 +27,6 @@ pub trait MarketInfo: Debug {
     /// Loads the market state information from the provided account information.
     async fn load_market_state_info(&mut self, account_info: &AccountInfo<'_>)
         -> Result<(), Error>;
-
-    /// Parses market parameters.
-    fn parse_market_params(
-        program_version: DexVersion,
-        base_mint: Token,
-        quote_mint: Token,
-    ) -> Result<(Pubkey, Pubkey, Pubkey, Pubkey), Error>;
 
     /// Initializes the vault signer key.
     async fn init_vault_signer_key(&mut self) -> Result<(), Error>;
@@ -47,7 +39,7 @@ pub trait OpenOrdersT {
     /// # Arguments
     ///
     /// * `rpc_client` - RPC client for interacting with the Solana blockchain.
-    /// * `program_id` - The program ID representing the market.
+    /// * `program` - The program id of the owner used for signing transactions.
     /// * `keypair` - The keypair of the owner used for signing transactions.
     /// * `market_address` - The public key of the market.
     ///
@@ -62,7 +54,7 @@ pub trait OpenOrdersT {
         rpc_client: Rpc,
         program_id: Pubkey,
         keypair: Keypair,
-        market_address: Pubkey,
+        market_id: Pubkey,
     ) -> Result<OpenOrders, Error>;
 
     /// Generates a new open orders account associated with a wallet.
@@ -73,7 +65,6 @@ pub trait OpenOrdersT {
     /// # Arguments
     ///
     /// * `connection` - The RPC client for interacting with the Solana blockchain.
-    /// * `program_id` - The program ID associated with the open orders.
     /// * `keypair` - The keypair of the wallet owner, used for signing the transaction.
     /// * `market_account` - The public key of the market associated with the open orders account.
     ///

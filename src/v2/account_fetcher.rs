@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_once_cell::unpin::Lazy;
 
@@ -10,11 +9,13 @@ use anchor_client::ClientError;
 use anchor_lang::AccountDeserialize;
 
 use openbook_v2::state::OpenOrdersAccount;
-use solana_client::nonblocking::rpc_client::RpcClient as RpcClientAsync;
-use solana_sdk::account::{AccountSharedData, ReadableAccount};
-use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::Signature;
-use solana_sdk::slot_history::Slot;
+use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_sdk::{
+    account::{AccountSharedData, ReadableAccount},
+    pubkey::Pubkey,
+    signature::Signature,
+    slot_history::Slot,
+};
 
 #[async_trait::async_trait]
 pub trait AccountFetcherTrait: Sync + Send {
@@ -34,17 +35,6 @@ pub trait AccountFetcherTrait: Sync + Send {
 }
 
 // Can't be in the trait, since then it would no longer be object-safe...
-pub async fn account_fetcher_fetch_anchor_account<T: AccountDeserialize>(
-    fetcher: &dyn AccountFetcherTrait,
-    address: &Pubkey,
-) -> anyhow::Result<T> {
-    let account = fetcher.fetch_raw_account(address).await?;
-    let mut data: &[u8] = account.data();
-    T::try_deserialize(&mut data)
-        .with_context(|| format!("deserializing anchor account {}", address))
-}
-
-// Can't be in the trait, since then it would no longer be object-safe...
 pub async fn account_fetcher_fetch_openorders_account(
     fetcher: &dyn AccountFetcherTrait,
     address: &Pubkey,
@@ -56,7 +46,7 @@ pub async fn account_fetcher_fetch_openorders_account(
 }
 
 pub struct RpcAccountFetcher {
-    pub rpc: RpcClientAsync,
+    pub rpc: RpcClient,
 }
 
 #[async_trait::async_trait]

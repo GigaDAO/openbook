@@ -1,8 +1,6 @@
-use {
-    solana_sdk::account::AccountSharedData, solana_sdk::pubkey::Pubkey, std::collections::HashMap,
-};
+use solana_sdk::{account::AccountSharedData, pubkey::Pubkey};
 
-pub use crate::v2::chain_data_fetcher::AccountFetcher;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SlotStatus {

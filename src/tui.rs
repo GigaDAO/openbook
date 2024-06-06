@@ -25,14 +25,14 @@ use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
 
 use crate::commitment_config::CommitmentConfig;
-use crate::matching::Side;
+#[cfg(feature = "v1")]
+use crate::matching::Side as OBV1Side;
 use crate::rpc::Rpc;
 use crate::rpc_client::RpcClient;
 use crate::utils::read_keypair;
 #[cfg(feature = "v1")]
 use crate::v1::{ob_client::OBClient, orders::OrderReturnType};
 
-use crate::tokens_and_markets::{DexVersion, Token};
 use anyhow::{Error, Result};
 
 enum InputMode {
@@ -43,9 +43,8 @@ enum InputMode {
 enum CurrentInput {
     RpcUrl,
     KeyPath,
-    BaseMint,
-    QuoteMint,
-    Side,
+    MarketID,
+    OBV1Side,
     TargetPrice,
 }
 
@@ -99,8 +98,7 @@ impl SelectedTab {
 struct App {
     rpc_url_input: Input,
     key_path_input: Input,
-    base_mint_input: Input,
-    quote_mint_input: Input,
+    market_id_input: Input,
     side_input: Input,
     target_price_input: Input,
     input_mode: InputMode,
@@ -117,8 +115,7 @@ impl Default for App {
         App {
             rpc_url_input: Input::new("https://api.mainnet-beta.solana.com".to_string()),
             key_path_input: Input::new("~/.config/solana/id.json".to_string()),
-            base_mint_input: Input::default(),
-            quote_mint_input: Input::default(),
+            market_id_input: Input::default(),
             side_input: Input::default(),
             target_price_input: Input::default(),
             transaction_status: Default::default(),
@@ -192,23 +189,18 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
 
                         assert_eq!(rpc_client.commitment(), CommitmentConfig::confirmed());
 
-                        let base_mint =
-                            Token::from_str(app.base_mint_input.value()).unwrap_or(Token::JLP);
-                        let quote_mint =
-                            Token::from_str(app.quote_mint_input.value()).unwrap_or(Token::USDC);
+                        let market_id = app.market_id_input.value();
 
                         if app.ob_client.is_none() {
                             let mut ob_client = OBClient::new(
                                 commitment_config,
-                                DexVersion::default(),
-                                base_mint,
-                                quote_mint,
+                                market_id.parse().unwrap(),
                                 true,
                                 123456789,
                             )
                             .await?;
                             ob_client.rpc_client = Rpc::new(rpc_client);
-                            ob_client.owner = owner;
+                            ob_client.owner = owner.into();
                             app.ob_client = Some(ob_client);
                         }
 
@@ -407,9 +399,9 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                             }
                             SelectedTab::Tab2 => {
                                 let side = match app.side_input.value() {
-                                    "bid" => Side::Bid,
-                                    "ask" => Side::Ask,
-                                    _ => Side::Bid,
+                                    "bid" => OBV1Side::Bid,
+                                    "ask" => OBV1Side::Ask,
+                                    _ => OBV1Side::Bid,
                                 };
                                 let price = app.target_price_input.value().parse::<f64>().unwrap();
 
@@ -459,22 +451,19 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                                     app.current_input = Some(CurrentInput::KeyPath);
                                 }
                                 CurrentInput::KeyPath => {
-                                    app.current_input = Some(CurrentInput::BaseMint);
+                                    app.current_input = Some(CurrentInput::MarketID);
                                 }
-                                CurrentInput::BaseMint => {
-                                    app.current_input = Some(CurrentInput::QuoteMint);
-                                }
-                                CurrentInput::QuoteMint => match app.selected_tab {
+                                CurrentInput::MarketID => match app.selected_tab {
                                     SelectedTab::Tab1 => {
                                         app.current_input = Some(CurrentInput::RpcUrl);
                                     }
                                     SelectedTab::Tab2 => {
-                                        app.current_input = Some(CurrentInput::Side);
+                                        app.current_input = Some(CurrentInput::OBV1Side);
                                     }
                                     SelectedTab::Tab3 => {}
                                     SelectedTab::Tab4 => {}
                                 },
-                                CurrentInput::Side => match app.selected_tab {
+                                CurrentInput::OBV1Side => match app.selected_tab {
                                     SelectedTab::Tab1 => {}
                                     SelectedTab::Tab2 => {
                                         app.current_input = Some(CurrentInput::TargetPrice);
@@ -505,13 +494,10 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                                 CurrentInput::KeyPath => {
                                     app.key_path_input.handle_event(&Event::Key(key));
                                 }
-                                CurrentInput::BaseMint => {
-                                    app.base_mint_input.handle_event(&Event::Key(key));
+                                CurrentInput::MarketID => {
+                                    app.market_id_input.handle_event(&Event::Key(key));
                                 }
-                                CurrentInput::QuoteMint => {
-                                    app.quote_mint_input.handle_event(&Event::Key(key));
-                                }
-                                CurrentInput::Side => {
+                                CurrentInput::OBV1Side => {
                                     app.side_input.handle_event(&Event::Key(key));
                                 }
                                 CurrentInput::TargetPrice => {
@@ -624,35 +610,15 @@ fn ui(frame: &mut Frame, app: &mut App) {
     frame.render_widget(rpc_url_input, first_row_layout[0]);
     frame.render_widget(key_path_input, first_row_layout[1]);
 
-    let scroll = app.base_mint_input.visual_scroll(width as usize);
-    let base_mint_input = Paragraph::new(app.base_mint_input.value())
+    let scroll = app.market_id_input.visual_scroll(width as usize);
+    let market_id_input = Paragraph::new(app.market_id_input.value())
         .style(match app.input_mode {
             InputMode::Normal => Style::default(),
             InputMode::Editing => {
                 let mut style = Style::default().fg(Color::Green);
                 if let Some(current_input) = &app.current_input {
                     match current_input {
-                        CurrentInput::BaseMint => {
-                            style = Style::default().white().on_black();
-                        }
-                        _ => {}
-                    }
-                }
-                style
-            }
-        })
-        .scroll((0, scroll as u16))
-        .block(Block::default().borders(Borders::ALL).title("Base Mint"));
-
-    let scroll = app.quote_mint_input.visual_scroll(width as usize);
-    let quote_mint_input = Paragraph::new(app.quote_mint_input.value())
-        .style(match app.input_mode {
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => {
-                let mut style = Style::default().fg(Color::Green);
-                if let Some(current_input) = &app.current_input {
-                    match current_input {
-                        CurrentInput::QuoteMint => {
+                        CurrentInput::MarketID => {
                             style = Style::default().white().on_black();
                         }
                         _ => {}
@@ -664,11 +630,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
         .scroll((0, scroll as u16))
         .block(Block::default().borders(Borders::ALL).title("Quote Mint"));
 
-    let second_row_layout =
-        Layout::new(Direction::Horizontal, [Percentage(50), Percentage(50)]).split(chunks[2]);
-
-    frame.render_widget(base_mint_input, second_row_layout[0]);
-    frame.render_widget(quote_mint_input, second_row_layout[1]);
+    frame.render_widget(market_id_input, chunks[2]);
 
     let scroll = app.side_input.visual_scroll(width as usize);
     let side_input = Paragraph::new(app.side_input.value())
@@ -678,7 +640,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 let mut style = Style::default().fg(Color::Green);
                 if let Some(current_input) = &app.current_input {
                     match current_input {
-                        CurrentInput::Side => {
+                        CurrentInput::OBV1Side => {
                             style = Style::default().white().on_black();
                         }
                         _ => {}
@@ -732,19 +694,13 @@ fn ui(frame: &mut Frame, app: &mut App) {
                             + 1,
                         first_row_layout[1].y + 1,
                     ),
-                    CurrentInput::BaseMint => frame.set_cursor(
-                        second_row_layout[0].x
-                            + ((app.base_mint_input.visual_cursor()).max(scroll) - scroll) as u16
+                    CurrentInput::MarketID => frame.set_cursor(
+                        chunks[2].x
+                            + ((app.market_id_input.visual_cursor()).max(scroll) - scroll) as u16
                             + 1,
-                        second_row_layout[0].y + 1,
+                        chunks[2].y + 1,
                     ),
-                    CurrentInput::QuoteMint => frame.set_cursor(
-                        second_row_layout[1].x
-                            + ((app.quote_mint_input.visual_cursor()).max(scroll) - scroll) as u16
-                            + 1,
-                        second_row_layout[1].y + 1,
-                    ),
-                    CurrentInput::Side => frame.set_cursor(
+                    CurrentInput::OBV1Side => frame.set_cursor(
                         order_row_layout[0].x
                             + ((app.side_input.visual_cursor()).max(scroll) - scroll) as u16
                             + 1,
