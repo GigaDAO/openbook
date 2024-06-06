@@ -2948,6 +2948,7 @@ dependencies = [
  "solana-account-decoder",
  "solana-cli-output",
  "solana-client",
+ "solana-rpc-client-api",
  "solana-sdk",
  "solana-transaction-status",
  "spl-associated-token-account",

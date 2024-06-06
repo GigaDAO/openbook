@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
         }
 
-        // Todo: ob v2 client 
+        // Todo: ob v2 client
         match args.command {
             Some(Commands::Info(_)) => {
                 info!("\n[*] Market Info: {:?}", ob_client);

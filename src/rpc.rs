@@ -6,6 +6,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use backon::ExponentialBuilder;
 use backon::Retryable;
+use solana_client::rpc_config::RpcSendTransactionConfig;
+use solana_client::rpc_request::RpcError;
 use solana_client::{
     client_error::ClientError,
     nonblocking::rpc_client::RpcClient,
@@ -14,6 +16,11 @@ use solana_client::{
     rpc_filter::{Memcmp, RpcFilterType},
     rpc_response::RpcConfirmedTransactionStatusWithSignature,
 };
+use solana_rpc_client_api::client_error::ErrorKind;
+use solana_sdk::instruction::Instruction;
+use solana_sdk::signature::Signer;
+use solana_sdk::signer::keypair::Keypair;
+use solana_sdk::transaction::Transaction;
 use solana_sdk::{account::Account, pubkey::Pubkey, signature::Signature};
 use solana_transaction_status::{EncodedConfirmedTransactionWithStatusMeta, UiTransactionEncoding};
 
@@ -287,6 +294,135 @@ impl Rpc {
             .into_iter()
             .map(|(key, account)| Ok((key, T::try_deserialize(&mut (&account.data as &[u8]))?)))
             .collect()
+    }
+
+    pub async fn send_and_confirm(
+        &self,
+        owner: Keypair,
+        instructions: Vec<Instruction>,
+    ) -> anyhow::Result<(bool, Signature)> {
+        let confirmed;
+        let mut sig = Signature::default();
+        let recent_hash = self
+            .inner()
+            .get_latest_blockhash_with_commitment(self.inner().commitment())
+            .await?
+            .0;
+        let txn = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&owner.pubkey()),
+            &[&owner],
+            recent_hash,
+        );
+
+        match self
+            .inner()
+            .send_transaction_with_config(
+                &txn,
+                RpcSendTransactionConfig {
+                    skip_preflight: false,
+                    max_retries: Some(3),
+                    preflight_commitment: Some(self.inner().commitment().commitment),
+                    encoding: None,
+                    min_context_slot: None,
+                },
+            )
+            .await
+        {
+            Ok(signature) => {
+                match (|| async { self.inner().confirm_transaction(&signature).await })
+                    .retry(&ExponentialBuilder::default())
+                    .await
+                {
+                    Ok(_ret) => {
+                        // Hack: We have received a signature. We assume it is confirmed due to the Solana network/Crank delay to get confirmation.
+                        confirmed = true;
+                        sig = signature;
+                        tracing::warn!("transaction confirmed: {:?}", signature);
+                    }
+                    Err(err) => {
+                        match err.kind() {
+                            ErrorKind::Reqwest(reqwest_error) => {
+                                if reqwest_error.is_timeout() {
+                                    tracing::error!("Request timed out");
+                                } else {
+                                    tracing::error!("Reqwest error: {:?}", reqwest_error);
+                                }
+                            }
+                            ErrorKind::RpcError(rpc_error) => match rpc_error {
+                                RpcError::RpcRequestError(message) => {
+                                    tracing::error!("RPC request error: {}", message);
+                                }
+                                RpcError::RpcResponseError {
+                                    code,
+                                    message,
+                                    data,
+                                } => {
+                                    tracing::error!("RPC error code: {:?}", code);
+                                    tracing::error!("RPC error message: {:?}", message);
+                                    tracing::error!("RPC error data: {:?}", data);
+                                }
+                                RpcError::ParseError(message) => {
+                                    tracing::error!("RPC parse error: {}", message);
+                                }
+                                RpcError::ForUser(message) => {
+                                    tracing::error!("RPC error for user: {}", message);
+                                }
+                            },
+                            _ => {
+                                tracing::error!("Unexpected error: {:?}", err);
+                            }
+                        }
+                        tracing::error!(
+                            "Error occurred while processing instructions: {:?}",
+                            instructions
+                        );
+                        confirmed = false;
+                    }
+                }
+            }
+            Err(err) => {
+                match err.kind() {
+                    ErrorKind::Reqwest(reqwest_error) => {
+                        if reqwest_error.is_timeout() {
+                            tracing::error!("Request timed out");
+                        } else {
+                            tracing::error!("Reqwest error: {:?}", reqwest_error);
+                        }
+                    }
+                    ErrorKind::RpcError(rpc_error) => match rpc_error {
+                        RpcError::RpcRequestError(message) => {
+                            tracing::error!("RPC request error: {}", message);
+                        }
+                        RpcError::RpcResponseError {
+                            code,
+                            message,
+                            data,
+                        } => {
+                            tracing::error!("RPC error code: {:?}", code);
+                            tracing::error!("RPC error message: {:?}", message);
+                            tracing::error!("RPC error data: {:?}", data);
+                        }
+                        RpcError::ParseError(message) => {
+                            tracing::error!("RPC parse error: {}", message);
+                        }
+                        RpcError::ForUser(message) => {
+                            tracing::error!("RPC error for user: {}", message);
+                        }
+                    },
+                    _ => {
+                        tracing::error!("Unexpected error: {:?}", err);
+                    }
+                }
+                tracing::error!(
+                    "Error occurred while processing instructions: {:?}",
+                    instructions
+                );
+                confirmed = false;
+            }
+        };
+
+        Ok((confirmed, sig))
     }
 }
 
