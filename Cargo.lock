@@ -2931,7 +2931,7 @@ dependencies = [
  "async-once-cell",
  "async-trait",
  "backon",
- "borsh 1.5.1",
+ "borsh 0.10.3",
  "bump2version",
  "clap 4.5.4",
  "crossterm",

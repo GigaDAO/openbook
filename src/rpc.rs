@@ -144,7 +144,6 @@ impl Rpc {
     /// ```rust
     /// use openbook::signature::Signature;
     /// use openbook::rpc_client::RpcClient;
-    /// use openbook::v1::ob_client::SPL_TOKEN_ID;
     /// use openbook::rpc::Rpc;
     ///
     /// #[tokio::main]
@@ -154,7 +153,7 @@ impl Rpc {
     ///     let connection = RpcClient::new(rpc_url);
     ///     let rpc_client = Rpc::new(connection);
     ///
-    ///     match rpc_client.fetch_signatures_for_address(&SPL_TOKEN_ID.parse().unwrap(), Some(Signature::default()),
+    ///     match rpc_client.fetch_signatures_for_address(&"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".parse().unwrap(), Some(Signature::default()),
     ///         Some(Signature::default())).await {
     ///             Ok(accounts) => println!("Filtered accounts: {:?}", accounts),
     ///             Err(err) => eprintln!("Error getting filtered accounts: {:?}", err),
@@ -279,7 +278,7 @@ impl Rpc {
     }
 
     #[cfg(feature = "v2")]
-    pub async fn _fetch_anchor_accounts<T: AccountDeserialize + Discriminator>(
+    pub async fn fetch_anchor_accounts<T: AccountDeserialize + Discriminator>(
         &self,
         program: Pubkey,
     ) -> anyhow::Result<Vec<(Pubkey, T)>> {

@@ -1,12 +1,12 @@
 //! This module contains structs and functions related to the openbook market.
 use crate::{
     rpc::Rpc,
-    traits::MarketInfo,
     utils::{create_account_info_from_account, u64_slice_to_pubkey},
+    v1::traits::MarketInfo,
 };
 use anyhow::{Error, Result};
+use borsh::{BorshDeserialize, BorshSerialize};
 use openbook_dex::state::{gen_vault_signer_key, MarketState};
-use serde::{Deserialize, Serialize};
 use solana_sdk::{
     pubkey::Pubkey,
     sysvar::slot_history::{AccountInfo, ProgramError},
@@ -15,7 +15,7 @@ use solana_sdk::{
 use std::fmt::{Debug, Formatter};
 
 /// Struct representing a market with associated state and information.
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct Market {
     /// The public key of the program associated with the market.
     pub program_id: Pubkey,
@@ -64,6 +64,9 @@ pub struct Market {
 
     /// The public key of the asks associated with the market.
     pub asks_address: Pubkey,
+
+    /// The public key of the events authority used for consume transactions.
+    pub events_authority: Pubkey,
 }
 
 impl Debug for Market {
@@ -85,6 +88,7 @@ impl Debug for Market {
         writeln!(f, "        request_queue: {:?}", self.request_queue)?;
         writeln!(f, "        bids_address: {:?}", self.bids_address)?;
         writeln!(f, "        asks_address: {:?}", self.asks_address)?;
+        writeln!(f, "        events_authority: {:?}", self.events_authority)?;
         writeln!(f, "    }}")
     }
 }
@@ -99,7 +103,7 @@ impl MarketInfo for Market {
     /// * `rpc_client` - RPC client for interacting with the Solana blockchain.
     ///                 This client allows the crate to communicate with the Solana network,
     ///                 enabling actions like fetching account information and sending transactions.
-    /// * `program_version` - The version of the program representing the market.
+    /// * `program_id` - The version of the program representing the market.
     ///                       This indicates the specific version of the decentralized exchange (DEX) program
     ///                       running on the blockchain. Different versions may have different features or improvements.
     /// * `base_mint` - The symbol of the base mint.
@@ -127,7 +131,7 @@ impl MarketInfo for Market {
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
     /// use openbook::v1::market::Market;
-    /// use crate::openbook::traits::MarketInfo;
+    /// use openbook::v1::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
     ///
     /// #[tokio::main]
@@ -140,7 +144,7 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
     ///         .parse()
     ///         .unwrap();
     ///
@@ -152,7 +156,9 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let market = Market::new(rpc_client, program_id, market_id, base_mint, quote_mint, true).await?;
+    ///     let events_authority = Default::default();
+    ///
+    ///     let mut market = Market::new(rpc_client, program_id, market_id, base_mint, quote_mint, events_authority, true).await?;
     ///
     ///     println!("Initialized Market: {:?}", market);
     ///
@@ -165,6 +171,7 @@ impl MarketInfo for Market {
         market_id: Pubkey,
         base_mint: Pubkey,
         quote_mint: Pubkey,
+        events_authority: Pubkey,
         load: bool,
     ) -> Result<Self, Error> {
         let mut market = Self {
@@ -175,6 +182,7 @@ impl MarketInfo for Market {
             pc_lot_size: 1,
             quote_mint,
             base_mint,
+            events_authority,
             market_address: market_id,
             bids_address: Default::default(),
             asks_address: Default::default(),
@@ -216,7 +224,7 @@ impl MarketInfo for Market {
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
     /// use openbook::v1::market::Market;
-    /// use crate::openbook::traits::MarketInfo;
+    /// use openbook::v1::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
     ///
     /// #[tokio::main]
@@ -229,7 +237,7 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
     ///         .parse()
     ///         .unwrap();
     ///
@@ -241,7 +249,9 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let mut market = Market::new(rpc_client.clone(), program_id, market_id, base_mint, quote_mint, true).await?;
+    ///     let events_authority = Default::default();
+    ///
+    ///     let mut market = Market::new(rpc_client.clone(), program_id, market_id, base_mint, quote_mint, events_authority, true).await?;
     ///
     ///     market.load(&rpc_client.clone()).await?;
     ///
@@ -294,7 +304,7 @@ impl MarketInfo for Market {
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
     /// use openbook::v1::market::Market;
-    /// use crate::openbook::traits::MarketInfo;
+    /// use openbook::v1::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
     /// use openbook::utils::create_account_info_from_account;
     ///
@@ -308,7 +318,7 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
     ///         .parse()
     ///         .unwrap();
     ///
@@ -320,7 +330,9 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let mut market = Market::new(rpc_client.clone(), program_id, market_id, base_mint, quote_mint, true).await?;
+    ///     let events_authority = Default::default();
+    ///
+    ///     let mut market = Market::new(rpc_client.clone(), program_id, market_id, base_mint, quote_mint, events_authority, true).await?;
     ///
     ///     let mut account = rpc_client.clone().inner().get_account(&market.market_address).await?;
     ///     let program_id_binding = market.program_id;
@@ -392,7 +404,7 @@ impl MarketInfo for Market {
     /// ```rust
     /// use openbook::rpc_client::RpcClient;
     /// use openbook::v1::market::Market;
-    /// use crate::openbook::traits::MarketInfo;
+    /// use openbook::v1::traits::MarketInfo;
     /// use openbook::rpc::Rpc;
     ///
     /// #[tokio::main]
@@ -405,7 +417,7 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
     ///         .parse()
     ///         .unwrap();
     ///
@@ -417,7 +429,9 @@ impl MarketInfo for Market {
     ///         .parse()
     ///         .unwrap();
     ///
-    ///     let mut market = Market::new(rpc_client, program_id, market_id, base_mint, quote_mint, true).await?;
+    ///     let events_authority = Default::default();
+    ///
+    ///     let mut market = Market::new(rpc_client, program_id, market_id, base_mint, quote_mint, events_authority, true).await?;
     ///
     ///     market.init_vault_signer_key().await?;
     ///

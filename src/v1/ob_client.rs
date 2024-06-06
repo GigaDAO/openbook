@@ -5,8 +5,8 @@ use crate::v1::{
 use crate::{
     rpc::Rpc,
     rpc_client::RpcClient,
-    traits::{MarketInfo, OpenOrdersT},
     utils::{create_account_info_from_account, get_unix_secs, read_keypair, u64_slice_to_pubkey},
+    v1::traits::{MarketInfo, OpenOrdersT},
 };
 
 use anyhow::{Error, Result};
@@ -14,7 +14,7 @@ use openbook_dex::{
     critbit::Slab,
     instruction::SelfTradeBehavior,
     matching::{OrderType, Side},
-    state::MarketState,
+    state::{Market as MarketAuth, MarketState},
 };
 use rand::random;
 use solana_sdk::{
@@ -62,7 +62,7 @@ pub struct OBClient {
 
 impl Debug for OBClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        writeln!(f, "OBClient {{")?;
+        writeln!(f, "OB_V1_Client {{")?;
         writeln!(f, "    owner: {:?}", self.owner.pubkey())?;
         writeln!(f, "    rpc_client: {:?}", self.rpc_client)?;
         writeln!(f, "    quote_ata: {:?}", self.quote_ata)?;
@@ -74,25 +74,25 @@ impl Debug for OBClient {
 }
 
 impl OBClient {
-    /// Initializes a new instance of the `OBClient` struct, representing an OpenBook client.
+    /// Initializes a new instance of the `OBClient` struct, representing an OpenBook V1 program client.
     ///
-    /// This method initializes the `OBClient` struct, containing information about the requested market,
-    /// having the base and quote mints. It fetches and stores all data about this OpenBook market.
-    /// Additionally, it includes information about the account associated with the wallet on the OpenBook market
-    /// (e.g., open orders, bids, asks, etc.).
+    /// This method initializes the `OBClient` struct, containing information about the requested market id.
+    /// It fetches and stores all data about this OpenBook market. Additionally, it includes information about
+    /// the account associated with the wallet on the OpenBook market (e.g., open orders, bids, asks, etc.).
     ///
     /// # Arguments
     ///
-    /// * `commitment` - Commitment configuration for transactions.
-    /// * `market_id` - Market ID to fetch info about it.
-    /// * `load` - Boolean indicating whether to load market data immediately.
-    /// * `cache_ts` - Timestamp for caching current open orders.
+    /// * `commitment` - Commitment configuration for transactions, determining the level of finality required.
+    /// * `market_id` - Public key (ID) of the market to fetch information about.
+    /// * `load` - Boolean indicating whether to load market data immediately after initialization.
+    /// * `cache_ts` - Timestamp for caching current open orders, used to manage the cache validity.
     ///
     /// # Returns
     ///
-    /// Returns a new instance of the `OBClient` struct initialized with the provided parameters.
+    /// Returns a `Result` wrapping a new instance of the `OBClient` struct initialized with the provided parameters,
+    /// or an `Error` if the initialization process fails.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
@@ -102,7 +102,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -111,6 +111,20 @@ impl OBClient {
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// # Business Logic
+    ///
+    /// 1. Retrieve necessary env vars, such as the `RPC_URL` and `KEY_PATH` path.
+    /// 2. Read the owner's keypair from the specified key path.
+    /// 3. Initialize the RPC client with the given commitment configuration.
+    /// 4. Fetch the market account information on chain.
+    /// 5. Load the market state and extract base and quote mints.
+    /// 6. Initialize the `Market` struct with fetched market information.
+    /// 7. Fetche associated token accounts (ATA) for the base and quote tokens.
+    /// 8. Initialize the open orders for the client.
+    /// 9. Populate the open orders cache.
+    /// 10. Load bids and asks information if the `load` parameter is set to `true`.
+    ///
     pub async fn new(
         commitment: CommitmentConfig,
         market_id: Pubkey,
@@ -131,19 +145,34 @@ impl OBClient {
 
         let rpc_client = Rpc::new(rpc_client);
 
-        let mut account = rpc_client.inner().get_account(&market_id).await?;
-        let account_info;
+        let mut account_1 = rpc_client.inner().get_account(&market_id).await?;
+        let mut account_2 = rpc_client.inner().get_account(&market_id).await?;
+        let account_info_1;
+        let account_info_2;
         let program_id = SRM_PROGRAM_ID.parse().unwrap();
         {
-            account_info = create_account_info_from_account(
-                &mut account,
+            account_info_1 = create_account_info_from_account(
+                &mut account_1,
+                &market_id,
+                &program_id,
+                false,
+                false,
+            );
+            account_info_2 = create_account_info_from_account(
+                &mut account_2,
                 &market_id,
                 &program_id,
                 false,
                 false,
             );
         }
-        let market = MarketState::load(&account_info, &SRM_PROGRAM_ID.parse().unwrap(), false)?;
+        let market = MarketState::load(&account_info_1, &SRM_PROGRAM_ID.parse().unwrap(), false)?;
+        let market_auth =
+            MarketAuth::load(&account_info_2, &SRM_PROGRAM_ID.parse().unwrap(), false)?;
+        let default_auth = Default::default();
+        let events_authority = market_auth
+            .consume_events_authority()
+            .unwrap_or(&default_auth);
 
         let base_mint = Pubkey::from(u64_slice_to_pubkey(market.coin_mint));
         let quote_mint = Pubkey::from(u64_slice_to_pubkey(market.pc_mint));
@@ -154,6 +183,7 @@ impl OBClient {
             market_id,
             base_mint,
             quote_mint,
+            *events_authority,
             load,
         )
         .await?;
@@ -400,7 +430,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -435,7 +465,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -481,7 +511,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -637,7 +667,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -734,7 +764,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -809,18 +839,18 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
-    ///     let result = ob_client.make_match_orders_transaction(100).await?;
+    ///     let result = ob_client.match_orders_transaction(100).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn make_match_orders_transaction(&self, limit: u16) -> Result<(bool, Signature)> {
+    pub async fn match_orders_transaction(&self, limit: u16) -> Result<(bool, Signature)> {
         let ix = openbook_dex::instruction::match_orders(
             &self.market_info.program_id,
             &self.market_info.market_address,
@@ -865,7 +895,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -994,7 +1024,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -1097,7 +1127,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -1196,7 +1226,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -1277,20 +1307,20 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let open_orders_accounts = vec![ob_client.open_orders.oo_key];
     ///     let limit = 10;
-    ///     let result = ob_client.make_consume_events_instruction(open_orders_accounts, limit).await?;
+    ///     let result = ob_client.consume_events_instruction(open_orders_accounts, limit).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn make_consume_events_instruction(
+    pub async fn consume_events_instruction(
         &self,
         open_orders_accounts: Vec<Pubkey>,
         limit: u16,
@@ -1325,7 +1355,7 @@ impl OBClient {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v1::ob_client::OBClient;
@@ -1334,20 +1364,20 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let open_orders_accounts = vec![ob_client.open_orders.oo_key];
     ///     let limit = 10;
-    ///     let result = ob_client.make_consume_events_permissioned_instruction(open_orders_accounts, limit).await?;
+    ///     let result = ob_client.consume_events_permissioned_instruction(open_orders_accounts, limit).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn make_consume_events_permissioned_instruction(
+    pub async fn consume_events_permissioned_instruction(
         &self,
         open_orders_accounts: Vec<Pubkey>,
         limit: u16,
@@ -1357,7 +1387,7 @@ impl OBClient {
             open_orders_accounts.iter().collect(),
             &self.market_info.market_address,
             &self.market_info.event_queue,
-            &self.market_info.event_queue, // TODO: Update to consume_events_authority
+            &self.market_info.events_authority,
             limit,
         )
         .unwrap();
@@ -1388,7 +1418,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -1434,7 +1464,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
@@ -1482,7 +1512,7 @@ impl OBClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
     ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///

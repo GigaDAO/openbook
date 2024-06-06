@@ -105,7 +105,6 @@ pub fn get_unix_secs() -> u64 {
 /// ```rust
 /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
 /// use openbook::utils::{read_keypair, create_account_info_from_account};
-/// use openbook::state::MarketState;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -114,7 +113,7 @@ pub fn get_unix_secs() -> u64 {
 ///
 ///     let rpc_client = RpcClient::new(rpc_url.clone());
 ///
-///     let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR".parse()?;
+///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
 ///
 ///     let program_id = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX"
 ///         .parse()

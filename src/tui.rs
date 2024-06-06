@@ -189,16 +189,12 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
 
                         assert_eq!(rpc_client.commitment(), CommitmentConfig::confirmed());
 
-                        let market_id = app.market_id_input.value();
+                        let market_id = app.market_id_input.value().parse()?;
 
                         if app.ob_client.is_none() {
-                            let mut ob_client = OBClient::new(
-                                commitment_config,
-                                market_id.parse().unwrap(),
-                                true,
-                                123456789,
-                            )
-                            .await?;
+                            let mut ob_client =
+                                OBClient::new(commitment_config, market_id, true, 123456789)
+                                    .await?;
                             ob_client.rpc_client = Rpc::new(rpc_client);
                             ob_client.owner = owner.into();
                             app.ob_client = Some(ob_client);
@@ -628,7 +624,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
             }
         })
         .scroll((0, scroll as u16))
-        .block(Block::default().borders(Borders::ALL).title("Quote Mint"));
+        .block(Block::default().borders(Borders::ALL).title("Market ID"));
 
     frame.render_widget(market_id_input, chunks[2]);
 
@@ -775,7 +771,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
     let footer_layout =
         Layout::new(Direction::Vertical, [Max(1), Max(1), Max(1)]).split(third_row_layout[1]);
 
-    let top_footer = Line::raw("◄ ► or a/d to change tab | Press q to quit").centered();
+    let top_footer = Line::raw("◄ ► or a/d to change tab").centered();
     let bottom_footer = Line::raw("©️ GigaDAO Foundation")
         .bold()
         .centered()

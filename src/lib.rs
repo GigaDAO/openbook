@@ -4,7 +4,6 @@
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod rpc;
-pub mod traits;
 #[cfg(feature = "cli")]
 pub mod tui;
 pub mod utils;
@@ -27,3 +26,6 @@ pub use solana_sdk::commitment_config;
 pub use solana_sdk::pubkey;
 pub use solana_sdk::signature;
 pub use solana_sdk::signer::keypair;
+
+#[cfg(feature = "v2")]
+pub use openbook_v2::state as v2_state;

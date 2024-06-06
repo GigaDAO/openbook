@@ -8,7 +8,7 @@ async fn test_market_state_info() -> anyhow::Result<(), anyhow::Error> {
 
     let rpc_client = Rpc::new(RpcClient::new(rpc_url));
 
-    let market_id = "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+    let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
         .parse()
         .unwrap();
 
@@ -26,7 +26,7 @@ async fn test_market_state_info() -> anyhow::Result<(), anyhow::Error> {
     );
     assert_eq!(
         &market.market_address.to_string(),
-        "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+        "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
     );
     assert_eq!(
         &market.event_queue.to_string(),

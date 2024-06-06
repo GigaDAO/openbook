@@ -1,6 +1,5 @@
 #![allow(async_fn_in_trait)]
 
-#[cfg(feature = "v1")]
 use crate::v1::{market::Market, orders::OpenOrders};
 
 use crate::rpc::Rpc;
@@ -18,6 +17,7 @@ pub trait MarketInfo: Debug {
         market_id: Pubkey,
         base_mint: Pubkey,
         quote_mint: Pubkey,
+        events_authority: Pubkey,
         load: bool,
     ) -> Result<Market, Error>;
 

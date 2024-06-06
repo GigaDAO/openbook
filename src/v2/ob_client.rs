@@ -1,43 +1,49 @@
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    str::FromStr,
+    sync::Arc,
+};
 
-use anchor_lang::prelude::System;
-use anchor_lang::Id;
-use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::Token;
+use anchor_lang::{prelude::System, Id};
+use anchor_spl::{associated_token::AssociatedToken, token::Token};
+use anyhow::{Context, Error, Result};
+use fixed::types::I80F48;
+use rand::random;
+use serde::{Deserialize, Serialize};
+use spl_associated_token_account::get_associated_token_address;
 
-use openbook_v2::state::OracleConfigParams;
 use openbook_v2::{
-    state::{Market, OpenOrdersAccount, PlaceOrderType, SelfTradeBehavior, Side},
+    state::{
+        BookSide, Market, OpenOrdersAccount, OracleConfigParams, PlaceOrderType, SelfTradeBehavior,
+        Side,
+    },
     PlaceMultipleOrdersArgs, PlaceOrderArgs, PlaceOrderPeggedArgs,
 };
 
-use crate::v2::account_fetcher::{
-    account_fetcher_fetch_openorders_account, AccountFetcherTrait, CachedAccountFetcher,
-    RpcAccountFetcher,
+use solana_sdk::{
+    clock::Slot,
+    commitment_config::CommitmentConfig,
+    instruction::Instruction,
+    pubkey::Pubkey,
+    signature::{Keypair, Signature},
+    signer::Signer,
 };
-use crate::v2::context::MarketContext;
-use spl_associated_token_account::get_associated_token_address;
 
-use anyhow::{Error, Result};
-use solana_sdk::instruction::Instruction;
-use solana_sdk::signature::{Keypair, Signature};
-use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey, signer::Signer};
+use crate::{
+    rpc::Rpc,
+    rpc_client::RpcClient,
+    utils::{get_unix_secs, read_keypair},
+    v2::{
+        account_fetcher::{
+            account_fetcher_fetch_openorders_account, AccountFetcherTrait, CachedAccountFetcher,
+            RpcAccountFetcher,
+        },
+        context::MarketContext,
+    },
+};
 
-use crate::rpc::Rpc;
-use rand::random;
-use solana_sdk::clock::Slot;
-
-use crate::rpc_client::RpcClient;
-use crate::utils::get_unix_secs;
-use crate::utils::read_keypair;
-use anyhow::Context;
-use fixed::types::I80F48;
-use openbook_v2::state::BookSide;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct OpenOrderNode {
     pub is_buy: bool,
     pub price: f64,
@@ -45,6 +51,19 @@ pub struct OpenOrderNode {
     pub order_id: u64,
     pub timestamp: u64,
     pub slot: u8,
+}
+
+impl Debug for OpenOrderNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        writeln!(f, "OpenOrders {{")?;
+        writeln!(f, "        order_id: {:?}", self.order_id)?;
+        writeln!(f, "        is_buy: {:?}", self.is_buy)?;
+        writeln!(f, "        price: {:?}", self.price)?;
+        writeln!(f, "        amount: {:?}", self.amount)?;
+        writeln!(f, "        timestamp: {:?}", self.timestamp)?;
+        writeln!(f, "        slot: {:?}", self.slot)?;
+        writeln!(f, "}}")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -58,8 +77,8 @@ pub struct BestQuotes {
     pub highest_bid: f64,
     pub lowest_ask: f64,
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct PricePoint {
     pub id: String,
     pub mint_symbol: String,
@@ -68,7 +87,6 @@ pub struct PricePoint {
     pub price: f64,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct PriceData {
     pub data: HashMap<String, PricePoint>,
 }
@@ -86,26 +104,105 @@ pub struct AtaBalances {
 pub struct OBClient {
     /// The keypair of the owner used for signing transactions related to the market.
     pub owner: Arc<Keypair>,
+
     /// The RPC client for interacting with the Solana blockchain.
     pub rpc_client: Rpc,
+
     /// The public key of the associated account holding the quote tokens.
     pub quote_ata: Pubkey,
+
     /// The public key of the associated account holding the base tokens.
     pub base_ata: Pubkey,
+
+    /// The public key of the index account.
     pub index_account: Pubkey,
+
+    /// The public key of the market ID.
     pub market_id: Pubkey,
+
+    /// The account fetcher used to retrieve account data.
     pub account_fetcher: Arc<dyn AccountFetcherTrait>,
 
     /// Account info of the wallet on the market (e.g., open orders).
     pub open_orders_account: Pubkey,
-    /// open orders.
+
+    /// A list of open orders.
     pub open_orders: Vec<OpenOrderNode>,
+
     /// Information about the OpenBook market.
     pub market_info: Market,
+
+    /// Context information for the market.
     pub context: MarketContext,
 }
 
+impl Debug for OBClient {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        writeln!(f, "OB_V2_Client {{")?;
+        writeln!(f, "    owner: {:?}", self.owner.pubkey())?;
+        writeln!(f, "    rpc_client: {:?}", self.rpc_client)?;
+        writeln!(f, "    quote_ata: {:?}", self.quote_ata)?;
+        writeln!(f, "    base_ata: {:?}", self.base_ata)?;
+        writeln!(f, "    open_orders: {:?}", self.open_orders)?;
+        writeln!(f, "    market_info: {:?}", self.market_info)?;
+        writeln!(f, "    market_id: {:?}", self.market_id)?;
+        writeln!(f, "    index_account: {:?}", self.index_account)?;
+        writeln!(f, "}}")
+    }
+}
+
 impl OBClient {
+    /// Initializes a new instance of the `OBClient` struct, representing an OpenBook V2 program client.
+    ///
+    /// This method initializes the `OBClient` struct, containing information about the requested market id,
+    /// It fetches and stores all data about this OpenBook market. Additionally, it includes information about
+    /// the account associated with the wallet on the OpenBook market (e.g., open orders, bids, asks, etc.).
+    ///
+    /// # Arguments
+    ///
+    /// * `commitment` - Commitment configuration for transactions, determining the level of finality required.
+    /// * `market_id` - Public key (ID) of the market to fetch information about.
+    /// * `new` - Boolean indicating whether to create new open orders and index accounts.
+    /// * `load` - Boolean indicating whether to load market data immediately after initialization.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` wrapping a new instance of the `OBClient` struct initialized with the provided parameters,
+    /// or an `Error` if the initialization process fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     println!("Initialized OBClient: {:?}", ob_client);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Business Logic
+    ///
+    /// 1. Retrieve necessary environment variables, such as the `RPC_URL`, `KEY_PATH`, open orders key `OOS_KEY`, and index key `INDEX_KEY`.
+    /// 2. Read the owner's keypair from the specified key path.
+    /// 3. Initialize the RPC client with the given commitment configuration.
+    /// 4. Fetch the market information from the Solana blockchain.
+    /// 5. Generate associated token addresses (ATA) for the base and quote tokens.
+    /// 6. Initialize the context with market information.
+    /// 7. Initialize the account fetcher for fetching account data.
+    /// 8. Populate the initial fields of the `OBClient` struct.
+    /// 9. Load open orders and bids/asks information if the `load` parameter is set to `true`.
+    /// 10. Create new open orders and index accounts if the `new` parameter is set to `true`.
+    ///
     pub async fn new(
         commitment: CommitmentConfig,
         market_id: Pubkey,
@@ -128,10 +225,7 @@ impl OBClient {
 
         let rpc = Rpc::new(rpc_client);
 
-        let market_info = rpc
-            .fetch_anchor_account::<Market>(&market_id)
-            .await
-            .unwrap();
+        let market_info = rpc.fetch_anchor_account::<Market>(&market_id).await?;
 
         let base_ata = get_associated_token_address(&pub_owner_key.clone(), &market_info.base_mint);
         let quote_ata =
@@ -185,6 +279,27 @@ impl OBClient {
         Ok(ob_client)
     }
 
+    /// # Example
+    ///
+    /// ```rust
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let (confirmed, sig) = ob_client.settle_funds().await?;
+    ///
+    ///     println!("Got Signature: {:?}", sig);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn settle_funds(&self) -> Result<(bool, Signature)> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
@@ -214,82 +329,40 @@ impl OBClient {
             .await
     }
 
-    pub async fn place_market_order(
-        &mut self,
-        limit_price: f64,
-        quote_size_usd: u64,
-        side: Side,
-    ) -> Result<(bool, Signature)> {
-        let current_time = get_unix_secs();
-        let price_lots = self.native_price_to_lots_price(limit_price);
-        let max_quote_lots = self
-            .context
-            .max_quote_lots_including_maker_fees_from_usd(quote_size_usd);
-        let base_size = self.get_base_size_from_quote(quote_size_usd, limit_price);
-        let max_base_lots = self.context.max_base_lots_from_usd(base_size);
-        let ata = match side {
-            Side::Bid => self.quote_ata.clone(),
-            Side::Ask => self.base_ata.clone(),
-        };
-        let vault = self.market_info.get_vault_by_side(side);
-
-        tracing::debug!("base: {max_base_lots}, quote: {max_quote_lots}");
-        let oid = random::<u64>();
-
-        // TODO: update to market order inst
-        let ix = Instruction {
-            program_id: openbook_v2::id(),
-            accounts: {
-                anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::PlaceOrder {
-                        open_orders_account: self.open_orders_account,
-                        open_orders_admin: None,
-                        signer: self.owner(),
-                        market: self.market_id,
-                        bids: self.market_info.bids,
-                        asks: self.market_info.asks,
-                        event_heap: self.market_info.event_heap,
-                        oracle_a: self.market_info.oracle_a.into(),
-                        oracle_b: self.market_info.oracle_b.into(),
-                        user_token_account: ata,
-                        market_vault: vault,
-                        token_program: Token::id(),
-                    },
-                    None,
-                )
-            },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrder {
-                args: PlaceOrderArgs {
-                    side,
-                    price_lots,
-                    max_base_lots: max_base_lots as i64,
-                    max_quote_lots_including_fees: max_quote_lots as i64,
-                    client_order_id: oid,
-                    order_type: PlaceOrderType::PostOnly,
-                    expiry_timestamp: current_time + 86_400,
-                    self_trade_behavior: SelfTradeBehavior::AbortTransaction,
-                    limit: 12,
-                },
-            }),
-        };
-
-        self.rpc_client
-            .send_and_confirm((*self.owner).insecure_clone(), vec![ix])
-            .await
-    }
-
+    /// # Example
+    ///
+    /// ```rust , ignore
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    /// use openbook::v2_state::Side;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let (confirmed, sig, order_id, slot) = ob_client.place_limit_order(165.2, 1000, Side::Bid).await?;
+    ///
+    ///     println!("Got Order ID: {:?}", order_id);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn place_limit_order(
         &mut self,
         limit_price: f64,
-        quote_size_usd: u64,
+        quote_size: u64,
         side: Side,
     ) -> Result<(bool, Signature, u64, Slot)> {
         let current_time = get_unix_secs();
         let price_lots = self.native_price_to_lots_price(limit_price);
         let max_quote_lots = self
             .context
-            .max_quote_lots_including_maker_fees_from_usd(quote_size_usd);
-        let base_size = self.get_base_size_from_quote(quote_size_usd, limit_price);
+            .max_quote_lots_including_maker_fees_from_usd(quote_size);
+        let base_size = self.get_base_size_from_quote(quote_size, limit_price);
         let max_base_lots = self.context.max_base_lots_from_usd(base_size);
         let ata = match side {
             Side::Bid => self.quote_ata.clone(),
@@ -351,6 +424,91 @@ impl OBClient {
         Ok((confirmed, sig, oid, max_slot))
     }
 
+    pub async fn place_market_order(
+        &mut self,
+        limit_price: f64,
+        quote_size: u64,
+        side: Side,
+    ) -> Result<(bool, Signature)> {
+        let current_time = get_unix_secs();
+        let price_lots = self.native_price_to_lots_price(limit_price);
+        let max_quote_lots = self
+            .context
+            .max_quote_lots_including_maker_fees_from_usd(quote_size);
+        let base_size = self.get_base_size_from_quote(quote_size, limit_price);
+        let max_base_lots = self.context.max_base_lots_from_usd(base_size);
+        let ata = match side {
+            Side::Bid => self.quote_ata.clone(),
+            Side::Ask => self.base_ata.clone(),
+        };
+        let vault = self.market_info.get_vault_by_side(side);
+
+        tracing::debug!("base: {max_base_lots}, quote: {max_quote_lots}");
+        let oid = random::<u64>();
+
+        // TODO: update to market order inst
+        let ix = Instruction {
+            program_id: openbook_v2::id(),
+            accounts: {
+                anchor_lang::ToAccountMetas::to_account_metas(
+                    &openbook_v2::accounts::PlaceOrder {
+                        open_orders_account: self.open_orders_account,
+                        open_orders_admin: None,
+                        signer: self.owner(),
+                        market: self.market_id,
+                        bids: self.market_info.bids,
+                        asks: self.market_info.asks,
+                        event_heap: self.market_info.event_heap,
+                        oracle_a: self.market_info.oracle_a.into(),
+                        oracle_b: self.market_info.oracle_b.into(),
+                        user_token_account: ata,
+                        market_vault: vault,
+                        token_program: Token::id(),
+                    },
+                    None,
+                )
+            },
+            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrder {
+                args: PlaceOrderArgs {
+                    side,
+                    price_lots,
+                    max_base_lots: max_base_lots as i64,
+                    max_quote_lots_including_fees: max_quote_lots as i64,
+                    client_order_id: oid,
+                    order_type: PlaceOrderType::PostOnly,
+                    expiry_timestamp: current_time + 86_400,
+                    self_trade_behavior: SelfTradeBehavior::AbortTransaction,
+                    limit: 12,
+                },
+            }),
+        };
+
+        self.rpc_client
+            .send_and_confirm((*self.owner).insecure_clone(), vec![ix])
+            .await
+    }
+
+    /// # Example
+    ///
+    /// ```rust , ignore
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let (confirmed, sig) = ob_client.cancel_limit_order(12345678123578).await?;
+    ///
+    ///     println!("Got Sig: {:?}", sig);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn cancel_limit_order(&self, order_id: u128) -> Result<(bool, Signature)> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
@@ -376,6 +534,27 @@ impl OBClient {
             .await
     }
 
+    /// # Example
+    ///
+    /// ```rust , ignore
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let (confirmed, sig) = ob_client.cancel_all().await?;
+    ///
+    ///     println!("Got Sig: {:?}", sig);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn cancel_all(&self) -> Result<(bool, Signature)> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
@@ -447,6 +626,27 @@ impl OBClient {
             .await
     }
 
+    /// # Example
+    ///
+    /// ```rust , ignore
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let account = ob_client.find_or_create_account().await?;
+    ///
+    ///     println!("Got Account: {:?}", account);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn find_or_create_account(&self) -> Result<Pubkey> {
         let program = openbook_v2::id();
 
@@ -482,6 +682,27 @@ impl OBClient {
         Ok(openbook_account_tuples[index].0)
     }
 
+    /// # Example
+    ///
+    /// ```rust , ignore
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let indexer = ob_client.create_open_orders_indexer().await?;
+    ///
+    ///     println!("Got Indexer: {:?}", indexer);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_open_orders_indexer(&self) -> Result<(bool, Signature, Pubkey)> {
         let owner = &self.owner;
         let payer = &self.owner;
@@ -516,6 +737,27 @@ impl OBClient {
         Ok((confirmed, sig, open_orders_indexer))
     }
 
+    /// # Example
+    ///
+    /// ```rust
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let (confirmed, sig, account) = ob_client.create_open_orders_account(2, "Sol-USDC-OO-Account").await?;
+    ///
+    ///     println!("Got New OO Account: {:?}", account);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_open_orders_account(
         &self,
         account_num: u32,
@@ -751,21 +993,36 @@ impl OBClient {
             .await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn consume_events(
-        &self,
-        market: Market,
-        market_address: Pubkey,
-        limit: usize,
-    ) -> Result<(bool, Signature)> {
+    /// # Example
+    ///
+    /// ```rust
+    /// use openbook::commitment_config::CommitmentConfig;
+    /// use openbook::v2::ob_client::OBClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let commitment = CommitmentConfig::confirmed();
+    ///
+    ///     let market_id = "gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK".parse()?;
+    ///
+    ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
+    ///
+    ///     let (confirmed, sig) = ob_client.consume_events(255).await?;
+    ///
+    ///     println!("Tx Signature: {:?}", sig);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn consume_events(&self, limit: usize) -> Result<(bool, Signature)> {
         let ix = Instruction {
             program_id: openbook_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
                     &openbook_v2::accounts::ConsumeEvents {
-                        consume_events_admin: market.consume_events_admin.into(),
-                        market: market_address,
-                        event_heap: market.event_heap,
+                        consume_events_admin: self.market_info.consume_events_admin.into(),
+                        market: self.market_id,
+                        event_heap: self.market_info.event_heap,
                     },
                     None,
                 )
@@ -811,10 +1068,10 @@ impl OBClient {
         price_lots
     }
 
-    pub fn get_base_size_from_quote(&self, quote_size_usd: u64, limit_price: f64) -> u64 {
+    pub fn get_base_size_from_quote(&self, quote_size: u64, limit_price: f64) -> u64 {
         let base_decimals = self.market_info.base_decimals as u32;
         let base_factor = 10_u64.pow(base_decimals) as f64;
-        let base_size = ((quote_size_usd as f64 / limit_price) * base_factor) as u64;
+        let base_size = ((quote_size as f64 / limit_price) * base_factor) as u64;
         base_size
     }
 
@@ -914,25 +1171,6 @@ impl OBClient {
         let bids_base_total: f64 = I80F48::to_num::<f64>(bids_native_price) * 1000.;
 
         Ok((bids_base_total, asks_base_total))
-    }
-
-    pub async fn load_open_orders(&self) -> Result<Vec<OpenOrderNode>> {
-        let open_orders_account = self.openorders_account().await?;
-        let mut open_orders = Vec::new();
-        for order in open_orders_account.all_orders_in_use() {
-            let native_price = self.market_info.lot_to_native_price(order.locked_price);
-            let ui_price: f64 = I80F48::to_num::<f64>(native_price) * 1000.;
-            open_orders.push(OpenOrderNode {
-                is_buy: false, // Order object doesn't contain is_buy
-                price: ui_price,
-                amount: 0.0, // Order object doesn't contain amount
-                order_id: order.client_id,
-                timestamp: 0, // Order object doesn't contain timestamp
-                slot: 0,      // Order object doesn't contain slot
-            });
-        }
-
-        Ok(open_orders)
     }
 
     pub async fn get_token_balance(&self, ata: &Pubkey) -> Result<f64> {

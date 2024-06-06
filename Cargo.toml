@@ -2,7 +2,7 @@
 name = "openbook"
 version = "0.0.12"
 edition = "2021"
-description = "📖 A CLI, TUI and SDK to interact with the OpenBook market on the Solana blockchain (WIP)."
+description = "📖1️⃣2️⃣ A CLI, TUI and SDK to interact with OpenBook V1 and V2 markets on the Solana blockchain."
 license = "MIT"
 keywords = ["blockchain", "cli", "solana", "dex"]
 categories = ["command-line-utilities", "web-programming", "science"]
@@ -26,7 +26,7 @@ solana-sdk = "=1.17.34"
 rand = "0.8.5"
 solana-client = "=1.17.34"
 solana-rpc-client-api = "=1.17.34"
-borsh = { version = "1.5.1", features = ["derive"] }
+borsh = "0.10.3"
 serde_json = "1.0.114"
 tokio = "1.36.0"
 spl-associated-token-account = "=2.3.0"
@@ -36,7 +36,7 @@ solana-transaction-status = "=1.17.34"
 backon = "0.4.3"
 ratatui = { version = "0.26.2", features = ["crossterm"], optional = true }
 tui-input = { version = "0.8.0", optional = true }
-serde = { version = "1.0.200", features = ["derive"], optional = true }
+serde = { version = "1.0.200", features = ["derive"] }
 crossterm = { version = "0.27.0", optional = true }
 unicode-width = { version = "0.1.12", optional = true }
 strum = { version = "0.26.2", optional = true }
@@ -60,7 +60,7 @@ async-trait = {version = "0.1.80", optional = true}
 default = []
 v1 = ["openbook_dex", ]
 v2 = ["openbook-v2", "reqwest", "anchor-client", "anchor-lang", "anchor-spl", "fixed", "pyth-sdk-solana", "solana-account-decoder", "async-trait", "async-once-cell", "itertools"]
-cli = ["clap", "solana-cli-output", "ratatui", "tui-input", "serde", "crossterm", "unicode-width", "strum", "tracing-subscriber"]
+cli = ["clap", "solana-cli-output", "ratatui", "tui-input", "crossterm", "unicode-width", "strum", "tracing-subscriber"]
 
 [dev-dependencies]
 bump2version = "0.1.3"
