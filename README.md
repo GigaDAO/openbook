@@ -1,6 +1,5 @@
 # 📖 OpenBook
 
-[![Work In Progress](https://img.shields.io/badge/Work%20In%20Progress-red)](https://github.com/wiseaidev)
 [![made-with-rust](https://img.shields.io/badge/Made%20with-Rust-1f425f.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-blue.svg)](https://www.rust-lang.org)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/wiseaidev)
@@ -12,10 +11,7 @@
 
 ![Banner](https://github.com/GigaDAO/openbook/assets/62179149/ed83a9a8-4b8d-421d-be31-8eea73529444)
 
-📖 A CLI, TUI and SDK to interact with the OpenBook market on the Solana blockchain.
-
-> [!WARNING]  
-> The current release is not yet production-ready. This project is still undergoing active development.
+📖1️⃣2️⃣ A CLI, TUI and SDK to interact with OpenBook V1 and V2 markets on the Solana blockchain.
 
 ## Table of Contents
 
@@ -63,7 +59,7 @@ export KEY_PATH=<path_to_your_key_file>
 https://github.com/GigaDAO/openbook/assets/62179149/23b411ac-243c-4f89-b8a2-fcc021eb9fdd
 
 ```sh
-openbook tui
+openbook
 ```
 
 > [!NOTE]
@@ -75,99 +71,120 @@ export OOS_KEY=<your_associated_oo_sol_account>
 
 ## ⌨ Usage as CLI
 
+### OpenBook V1
+
 ### Fetch Market Info:
 
 ```sh
-openbook info
+openbook v1 info
 ```
 
-### Place a limit bid order:
+#### Place a limit bid order:
 
 ```sh
-openbook place -t 10.0 -s bid -b 0.5 -e -p 15.0
+openbook v1 place -t 10.0 -s bid -b 0.5 -e -p 15.0
 ```
 
-### Place a limit ask order:
+#### Place a limit ask order:
 
 ```sh
-openbook place -t 10.0 -s ask -b 0.5 -e -p 15.0
+openbook v1 place -t 10.0 -s ask -b 0.5 -e -p 15.0
 ```
 
-### Cancel all limit orders:
+#### Cancel all limit orders:
 
 ```sh
-openbook cancel -e
+openbook v1 cancel -e
 ```
 
-### Settle balances:
+#### Settle balances:
 
 ```sh
-openbook settle -e
+openbook v1 settle -e
 ```
 
-### Cancel Settle Place Order:
+#### Cancel Settle Place Order:
 
 ```sh
-openbook cancel-settle-place -u 5.0 -t 2.5 -p 5.0 -a 5.0
+openbook v1 cancel-settle-place -u 5.0 -t 2.5 -p 5.0 -a 5.0
 ```
 
-### Cancel Settle Place Bid Order:
+#### Cancel Settle Place Bid Order:
 
 ```sh
-openbook cancel-settle-place-bid -t 0.5 -b 15.0
+openbook v1 cancel-settle-place-bid -t 0.5 -b 15.0
 ```
 
-### Cancel Settle Place Ask Order:
+#### Cancel Settle Place Ask Order:
 
 ```sh
-openbook cancel-settle-place-ask -t 0.5 -a 15.0
+openbook v1 cancel-settle-place-ask -t 0.5 -a 15.0
 ```
 
-### Fetch all orders for current owner (bids + asks):
+#### Fetch all orders for current owner (bids + asks):
 
 ```sh
-openbook load
+openbook v1 load
 ```
 
-### Make match orders transaction:
+#### Match orders transaction:
 
 ```sh
-openbook match --limit 3
+openbook v1 match --limit 3
 ```
 
-### Make consume events instruction:
+#### Consume events instruction:
 
 ```sh
-openbook consume --limit 2
+openbook v1 consume --limit 2
 ```
 
-### Make consume events permissioned instruction:
+#### Consume events permissioned instruction:
 
 ```sh
-openbook consume-permissioned --limit 2
+openbook v1 consume-permissioned --limit 2
 ```
+
+> [!TIP]
+> Use `v1 --market-id` argument to overwrite the market id in the cli.
+
+### OpenBook V2
+
+### Fetch Market Info:
+
+```sh
+openbook v2 info
+```
+
+> [!TIP]
+> Use `v2 --market-id` argument to overwrite the market id in the cli.
 
 ## 💻 Usage as Dependency
 
+### OpenBook V1
+
 ```toml
 [dependencies]
-openbook = "0.0.12"
+openbook = { version = "0.1.0" , features = ["v1"] } 
 ```
 
-```rust
-use openbook::orders::OrderReturnType;
-use openbook::commitment_config::CommitmentConfig;
-use openbook::ob_client::OBClient;
-use openbook::tokens_and_markets::{DexVersion, Token};
+```rust , ignore
+use openbook::v1::orders::OrderReturnType;
+use openbook::v1::ob_client::OBClient;
 use openbook::matching::Side;
+use openbook::commitment_config::CommitmentConfig;
 use openbook::pubkey::Pubkey;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let commitment = CommitmentConfig::confirmed();
 
-    let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
-    println!("Initialized OpenBook Client: {:?}", ob_client);
+    let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
+        .parse()
+        .unwrap();
+
+    let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
+    println!("Initialized OpenBook V1 Client: {:?}", ob_client);
 
     println!("[*] Place Limit Order");
     if let Some(ord_ret_type) = ob_client
@@ -247,25 +264,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("[*] Transaction successful, signature: {:?}", result);
 
-    let m = ob_client.make_match_orders_transaction(1).await?;
+    let m = ob_client.match_orders_transaction(1).await?;
     println!("Match Order Result: {:?}", m);
 
-    let open_orders_accounts = vec![Pubkey::new_from_array([0; 32])];
+    let open_orders_accounts = vec![ob_client.open_orders.oo_key];
     let limit = 10;
 
-    let e = ob_client.make_consume_events_instruction(open_orders_accounts.clone(), limit).await?;
+    let e = ob_client.consume_events_instruction(open_orders_accounts.clone(), limit).await?;
     println!("Consume Events Result: {:?}", e);
 
-    let p = ob_client.make_consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
+    let p = ob_client.consume_events_permissioned_instruction(open_orders_accounts.clone(), limit).await?;
     println!("Consume Events Permissioned Result: {:?}", p);
 
     Ok(())
 }
 ```
 
-## 🎨 Options
+## 🎨 Top Level Command
 
-| Option                                 | Default Value | Description                                              |
+| Commands                                | Description                                              |
+|----------------------------------------|----------------------------------------------------------|
+| `v1` | - | OpenBook V1 client.       |
+| `v2` | - | OpenBook V2 client.       |
+
+### V1 SubCommands
+
+| SubCommands                                 | Default Value | Description                                              |
 |----------------------------------------|---------------|----------------------------------------------------------|
 | `place -t <TARGET_AMOUNT_QUOTE> -s <SIDE> -b <BEST_OFFSET_USDC> -e -p <PRICE_TARGET>` | - | Place a limit order with the specified parameters.       |
 | `cancel -e`                            | -             | Cancel all existing order for the current owner.        |
@@ -277,8 +301,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `consume --limit <LIMIT>`              | -             | Consume events instruction with the specified limit.     |
 | `consume-permissioned --limit <LIMIT>` | -             | Consume events permissioned instruction with the specified limit. |
 | `load`                                 | -             | Load orders for the current owner, bids + asks.                      |
-| `info`                                 | -             | Fetch OpenBook market info.                              |
+| `info`                                 | -             | Fetch OpenBook V1 market info.                              |
 | `tui`                                 | -             | launch tui.                              |
+
+### V2 SubCommands
+
+| SubCommands                                 | Default Value | Description                                              |
+|----------------------------------------|---------------|----------------------------------------------------------|
+| `info`                                 | -             | Fetch OpenBook V2 market info.                              |
 
 ## 🤝 Contributing
 

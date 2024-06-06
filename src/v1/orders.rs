@@ -1,7 +1,7 @@
 //! This module contains structs and functions related to open orders on the Solana blockchain.
 
 use crate::rpc::Rpc;
-use crate::traits::OpenOrdersT;
+use crate::v1::traits::OpenOrdersT;
 use anyhow::{Error, Result};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_client::rpc_config::RpcSendTransactionConfig;
@@ -204,7 +204,7 @@ impl OpenOrdersT for OpenOrders {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Default, BorshDeserialize, BorshSerialize, Debug)]
 pub struct OpenOrdersCacheEntry {
     pub open_orders: OpenOrders,
     pub ts: u128,

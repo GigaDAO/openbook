@@ -1,5 +1,4 @@
 use anyhow::Result;
-use tracing::{error, info};
 
 /// The entry point for the OpenBook CLI application.
 ///
@@ -11,14 +10,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "cli")]
     {
         use clap::Parser;
-        use openbook::cli::{Cli, Commands};
+        use openbook::cli::{Cli, Commands, V1ActionsCommands, V2ActionsCommands};
         use openbook::commitment_config::CommitmentConfig;
         use openbook::matching::Side;
-        use openbook::ob_client::OBClient;
-        use openbook::orders::OrderReturnType;
-        use openbook::tokens_and_markets::{DexVersion, Token};
         use openbook::tui::run_tui;
+        #[cfg(feature = "v1")]
+        use openbook::v1::{ob_client::OBClient as OBV1Client, orders::OrderReturnType};
+        #[cfg(feature = "v2")]
+        use openbook::v2::ob_client::OBClient as OBV2Client;
         use solana_cli_output::display::println_transaction;
+        use tracing::{error, info};
         use tracing_subscriber::{filter, fmt};
 
         // Start configuring a `fmt` subscriber
@@ -34,325 +35,350 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::subscriber::set_global_default(subscriber)?;
 
         let args = Cli::parse();
-        let mut ob_client;
-
-        if args.command == Some(Commands::Tui) {
-            ob_client = OBClient::new(
-                CommitmentConfig::confirmed(),
-                DexVersion::default(),
-                Token::JLP,
-                Token::USDC,
-                false,
-                123456789,
-            )
-            .await?;
-        } else {
-            ob_client = OBClient::new(
-                CommitmentConfig::confirmed(),
-                DexVersion::default(),
-                Token::JLP,
-                Token::USDC,
-                true,
-                123456789,
-            )
-            .await?;
-        }
 
         match args.command {
-            Some(Commands::Info(_)) => {
-                info!("\n[*] Market Info: {:?}", ob_client);
-            }
-            Some(Commands::Place(arg)) => {
-                let side = match arg.side.as_str() {
-                    "bid" => Side::Bid,
-                    "ask" => Side::Ask,
-                    _ => Side::Bid,
-                };
+            Some(Commands::V1(cmd)) => {
+                let mut ob_client_v1 = OBV1Client::new(
+                    CommitmentConfig::confirmed(),
+                    cmd.market_id.parse().unwrap(),
+                    true,
+                    123456789,
+                )
+                .await?;
+                match cmd.command {
+                    Some(V1ActionsCommands::Info(_)) => {
+                        info!("\n[*] {:?}", ob_client_v1);
+                    }
+                    Some(V1ActionsCommands::Place(arg)) => {
+                        let side = match arg.side.as_str() {
+                            "bid" => Side::Bid,
+                            "ask" => Side::Ask,
+                            _ => Side::Bid,
+                        };
 
-                if let Some(ord_ret_type) = ob_client
-                    .place_limit_order(
-                        arg.target_amount_quote,
-                        side,
-                        arg.best_offset_usdc,
-                        arg.execute,
-                        arg.price_target,
-                    )
-                    .await?
-                {
-                    match ord_ret_type {
-                        OrderReturnType::Instructions(insts) => {
-                            info!("\n[*] Got Instructions: {:?}", insts);
-                        }
-                        OrderReturnType::Signature(signature) => {
-                            info!("\n[*] Transaction successful, signature: {:?}", signature);
-                            match ob_client.rpc_client.fetch_transaction(&signature).await {
-                                Ok(confirmed_transaction) => {
-                                    println_transaction(
-                                        &confirmed_transaction
-                                            .transaction
-                                            .transaction
-                                            .decode()
-                                            .expect("Successful decode"),
-                                        confirmed_transaction.transaction.meta.as_ref(),
-                                        "  ",
-                                        None,
-                                        None,
-                                    );
+                        if let Some(ord_ret_type) = ob_client_v1
+                            .place_limit_order(
+                                arg.target_amount_quote,
+                                side,
+                                arg.best_offset_usdc,
+                                arg.execute,
+                                arg.price_target,
+                            )
+                            .await?
+                        {
+                            match ord_ret_type {
+                                OrderReturnType::Instructions(insts) => {
+                                    info!("\n[*] Got Instructions: {:?}", insts);
                                 }
-                                Err(err) => error!(
-                                    "[*] Unable to get confirmed transaction details: {}",
-                                    err
-                                ),
+                                OrderReturnType::Signature(signature) => {
+                                    info!(
+                                        "\n[*] Transaction successful, signature: {:?}",
+                                        signature
+                                    );
+                                    match ob_client_v1
+                                        .rpc_client
+                                        .fetch_transaction(&signature)
+                                        .await
+                                    {
+                                        Ok(confirmed_transaction) => {
+                                            println_transaction(
+                                                &confirmed_transaction
+                                                    .transaction
+                                                    .transaction
+                                                    .decode()
+                                                    .expect("Successful decode"),
+                                                confirmed_transaction.transaction.meta.as_ref(),
+                                                "  ",
+                                                None,
+                                                None,
+                                            );
+                                        }
+                                        Err(err) => error!(
+                                            "[*] Unable to get confirmed transaction details: {}",
+                                            err
+                                        ),
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
-            Some(Commands::Cancel(arg)) => {
-                if let Some(ord_ret_type) = ob_client.cancel_orders(arg.execute).await? {
-                    match ord_ret_type {
-                        OrderReturnType::Instructions(insts) => {
-                            info!("\n[*] Got Instructions: {:?}", insts);
-                        }
-                        OrderReturnType::Signature(signature) => {
-                            info!("\n[*] Transaction successful, signature: {:?}", signature);
-                            match ob_client.rpc_client.fetch_transaction(&signature).await {
-                                Ok(confirmed_transaction) => {
-                                    println_transaction(
-                                        &confirmed_transaction
-                                            .transaction
-                                            .transaction
-                                            .decode()
-                                            .expect("Successful decode"),
-                                        confirmed_transaction.transaction.meta.as_ref(),
-                                        "  ",
-                                        None,
-                                        None,
-                                    );
+                    Some(V1ActionsCommands::Cancel(arg)) => {
+                        if let Some(ord_ret_type) = ob_client_v1.cancel_orders(arg.execute).await? {
+                            match ord_ret_type {
+                                OrderReturnType::Instructions(insts) => {
+                                    info!("\n[*] Got Instructions: {:?}", insts);
                                 }
-                                Err(err) => error!(
-                                    "[*] Unable to get confirmed transaction details: {}",
-                                    err
-                                ),
+                                OrderReturnType::Signature(signature) => {
+                                    info!(
+                                        "\n[*] Transaction successful, signature: {:?}",
+                                        signature
+                                    );
+                                    match ob_client_v1
+                                        .rpc_client
+                                        .fetch_transaction(&signature)
+                                        .await
+                                    {
+                                        Ok(confirmed_transaction) => {
+                                            println_transaction(
+                                                &confirmed_transaction
+                                                    .transaction
+                                                    .transaction
+                                                    .decode()
+                                                    .expect("Successful decode"),
+                                                confirmed_transaction.transaction.meta.as_ref(),
+                                                "  ",
+                                                None,
+                                                None,
+                                            );
+                                        }
+                                        Err(err) => error!(
+                                            "[*] Unable to get confirmed transaction details: {}",
+                                            err
+                                        ),
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
-            Some(Commands::Settle(arg)) => {
-                if let Some(ord_ret_type) = ob_client.settle_balance(arg.execute).await? {
-                    match ord_ret_type {
-                        OrderReturnType::Instructions(insts) => {
-                            info!("\n[*] Got Instructions: {:?}", insts);
-                        }
-                        OrderReturnType::Signature(signature) => {
-                            info!("\n[*] Transaction successful, signature: {:?}", signature);
-                            match ob_client.rpc_client.fetch_transaction(&signature).await {
-                                Ok(confirmed_transaction) => {
-                                    println_transaction(
-                                        &confirmed_transaction
-                                            .transaction
-                                            .transaction
-                                            .decode()
-                                            .expect("Successful decode"),
-                                        confirmed_transaction.transaction.meta.as_ref(),
-                                        "  ",
-                                        None,
-                                        None,
-                                    );
+                    Some(V1ActionsCommands::Settle(arg)) => {
+                        if let Some(ord_ret_type) = ob_client_v1.settle_balance(arg.execute).await?
+                        {
+                            match ord_ret_type {
+                                OrderReturnType::Instructions(insts) => {
+                                    info!("\n[*] Got Instructions: {:?}", insts);
                                 }
-                                Err(err) => error!(
-                                    "[*] Unable to get confirmed transaction details: {}",
-                                    err
-                                ),
+                                OrderReturnType::Signature(signature) => {
+                                    info!(
+                                        "\n[*] Transaction successful, signature: {:?}",
+                                        signature
+                                    );
+                                    match ob_client_v1
+                                        .rpc_client
+                                        .fetch_transaction(&signature)
+                                        .await
+                                    {
+                                        Ok(confirmed_transaction) => {
+                                            println_transaction(
+                                                &confirmed_transaction
+                                                    .transaction
+                                                    .transaction
+                                                    .decode()
+                                                    .expect("Successful decode"),
+                                                confirmed_transaction.transaction.meta.as_ref(),
+                                                "  ",
+                                                None,
+                                                None,
+                                            );
+                                        }
+                                        Err(err) => error!(
+                                            "[*] Unable to get confirmed transaction details: {}",
+                                            err
+                                        ),
+                                    }
+                                }
                             }
                         }
                     }
+                    Some(V1ActionsCommands::Match(arg)) => {
+                        let (_confirmed, signature) =
+                            ob_client_v1.match_orders_transaction(arg.limit).await?;
+                        info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
+                            Ok(confirmed_transaction) => {
+                                info!("\n{:?}", confirmed_transaction);
+                                println_transaction(
+                                    &confirmed_transaction
+                                        .transaction
+                                        .transaction
+                                        .decode()
+                                        .expect("Successful decode"),
+                                    confirmed_transaction.transaction.meta.as_ref(),
+                                    "  ",
+                                    None,
+                                    None,
+                                );
+                            }
+                            Err(err) => {
+                                error!("[*] Unable to get confirmed transaction details: {}", err)
+                            }
+                        }
+                    }
+                    Some(V1ActionsCommands::CancelSettlePlace(arg)) => {
+                        let (_confirmed, signature) = ob_client_v1
+                            .cancel_settle_place(
+                                arg.usdc_ask_target,
+                                arg.target_usdc_bid,
+                                arg.price_jlp_usdc_bid,
+                                arg.ask_price_jlp_usdc,
+                            )
+                            .await?;
+                        info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
+                            Ok(confirmed_transaction) => {
+                                info!("\n{:?}", confirmed_transaction);
+                                println_transaction(
+                                    &confirmed_transaction
+                                        .transaction
+                                        .transaction
+                                        .decode()
+                                        .expect("Successful decode"),
+                                    confirmed_transaction.transaction.meta.as_ref(),
+                                    "  ",
+                                    None,
+                                    None,
+                                );
+                            }
+                            Err(err) => {
+                                error!("[*] Unable to get confirmed transaction details: {}", err)
+                            }
+                        }
+                    }
+                    Some(V1ActionsCommands::CancelSettlePlaceBid(arg)) => {
+                        let (_confirmed, signature) = ob_client_v1
+                            .cancel_settle_place_bid(
+                                arg.target_size_usdc_bid,
+                                arg.bid_price_jlp_usdc,
+                            )
+                            .await?;
+                        info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
+                            Ok(confirmed_transaction) => {
+                                info!("\n{:?}", confirmed_transaction);
+                                println_transaction(
+                                    &confirmed_transaction
+                                        .transaction
+                                        .transaction
+                                        .decode()
+                                        .expect("Successful decode"),
+                                    confirmed_transaction.transaction.meta.as_ref(),
+                                    "  ",
+                                    None,
+                                    None,
+                                );
+                            }
+                            Err(err) => {
+                                error!("[*] Unable to get confirmed transaction details: {}", err)
+                            }
+                        }
+                    }
+                    Some(V1ActionsCommands::CancelSettlePlaceAsk(arg)) => {
+                        let (_confirmed, signature) = ob_client_v1
+                            .cancel_settle_place_ask(
+                                arg.target_size_usdc_ask,
+                                arg.ask_price_jlp_usdc,
+                            )
+                            .await?;
+                        info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
+                            Ok(confirmed_transaction) => {
+                                info!("\n{:?}", confirmed_transaction);
+                                println_transaction(
+                                    &confirmed_transaction
+                                        .transaction
+                                        .transaction
+                                        .decode()
+                                        .expect("Successful decode"),
+                                    confirmed_transaction.transaction.meta.as_ref(),
+                                    "  ",
+                                    None,
+                                    None,
+                                );
+                            }
+                            Err(err) => {
+                                error!("[*] Unable to get confirmed transaction details: {}", err)
+                            }
+                        }
+                    }
+                    Some(V1ActionsCommands::Consume(arg)) => {
+                        let (_confirmed, signature) = ob_client_v1
+                            .consume_events_instruction(Vec::new(), arg.limit)
+                            .await?;
+                        info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
+                            Ok(confirmed_transaction) => {
+                                info!("\n{:?}", confirmed_transaction);
+                                println_transaction(
+                                    &confirmed_transaction
+                                        .transaction
+                                        .transaction
+                                        .decode()
+                                        .expect("Successful decode"),
+                                    confirmed_transaction.transaction.meta.as_ref(),
+                                    "  ",
+                                    None,
+                                    None,
+                                );
+                            }
+                            Err(err) => {
+                                error!("[*] Unable to get confirmed transaction details: {}", err)
+                            }
+                        }
+                    }
+                    Some(V1ActionsCommands::ConsumePermissioned(arg)) => {
+                        let (_confirmed, signature) = ob_client_v1
+                            .consume_events_permissioned_instruction(Vec::new(), arg.limit)
+                            .await?;
+                        info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
+                            Ok(confirmed_transaction) => {
+                                info!("\n{:?}", confirmed_transaction);
+                                println_transaction(
+                                    &confirmed_transaction
+                                        .transaction
+                                        .transaction
+                                        .decode()
+                                        .expect("Successful decode"),
+                                    confirmed_transaction.transaction.meta.as_ref(),
+                                    "  ",
+                                    None,
+                                    None,
+                                );
+                            }
+                            Err(err) => {
+                                error!("[*] Unable to get confirmed transaction details: {}", err)
+                            }
+                        }
+                    }
+                    Some(V1ActionsCommands::Load(_arg)) => {
+                        let l = ob_client_v1.load_orders_for_owner().await?;
+                        info!("\n[*] Found Program Accounts: {:?}", l);
+                    }
+                    Some(V1ActionsCommands::Find(_arg)) => {
+                        // Todo: Decode accounts data
+                        let result = ob_client_v1
+                            .find_open_orders_accounts_for_owner(
+                                ob_client_v1.open_orders.oo_key,
+                                1000,
+                            )
+                            .await?;
+                        info!("\n[*] Found Open Orders Accounts: {:?}", result);
+                    }
+                    None => {
+                        let _ = run_tui().await;
+                    }
                 }
             }
-            Some(Commands::Match(arg)) => {
-                let signature = ob_client.make_match_orders_transaction(arg.limit).await?;
-                info!("\n[*] Transaction successful, signature: {:?}", signature);
-                match ob_client.rpc_client.fetch_transaction(&signature).await {
-                    Ok(confirmed_transaction) => {
-                        info!("\n{:?}", confirmed_transaction);
-                        println_transaction(
-                            &confirmed_transaction
-                                .transaction
-                                .transaction
-                                .decode()
-                                .expect("Successful decode"),
-                            confirmed_transaction.transaction.meta.as_ref(),
-                            "  ",
-                            None,
-                            None,
-                        );
+            Some(Commands::V2(cmd)) => {
+                let ob_client_v2 = OBV2Client::new(
+                    CommitmentConfig::confirmed(),
+                    cmd.market_id.parse().unwrap(),
+                    false,
+                    true,
+                )
+                .await?;
+
+                match cmd.command {
+                    Some(V2ActionsCommands::Info(_)) => {
+                        info!("\n[*] {:?}", ob_client_v2);
                     }
-                    Err(err) => {
-                        error!("[*] Unable to get confirmed transaction details: {}", err)
+                    None => {
+                        let _ = run_tui().await;
                     }
                 }
             }
-            Some(Commands::CancelSettlePlace(arg)) => {
-                let signature = ob_client
-                    .cancel_settle_place(
-                        arg.usdc_ask_target,
-                        arg.target_usdc_bid,
-                        arg.price_jlp_usdc_bid,
-                        arg.ask_price_jlp_usdc,
-                    )
-                    .await?;
-                info!("\n[*] Transaction successful, signature: {:?}", signature);
-                match ob_client
-                    .rpc_client
-                    .fetch_transaction(&signature.ok_or("")?)
-                    .await
-                {
-                    Ok(confirmed_transaction) => {
-                        info!("\n{:?}", confirmed_transaction);
-                        println_transaction(
-                            &confirmed_transaction
-                                .transaction
-                                .transaction
-                                .decode()
-                                .expect("Successful decode"),
-                            confirmed_transaction.transaction.meta.as_ref(),
-                            "  ",
-                            None,
-                            None,
-                        );
-                    }
-                    Err(err) => {
-                        error!("[*] Unable to get confirmed transaction details: {}", err)
-                    }
-                }
-            }
-            Some(Commands::CancelSettlePlaceBid(arg)) => {
-                let signature = ob_client
-                    .cancel_settle_place_bid(arg.target_size_usdc_bid, arg.bid_price_jlp_usdc)
-                    .await?;
-                info!("\n[*] Transaction successful, signature: {:?}", signature);
-                match ob_client
-                    .rpc_client
-                    .fetch_transaction(&signature.ok_or("")?)
-                    .await
-                {
-                    Ok(confirmed_transaction) => {
-                        info!("\n{:?}", confirmed_transaction);
-                        println_transaction(
-                            &confirmed_transaction
-                                .transaction
-                                .transaction
-                                .decode()
-                                .expect("Successful decode"),
-                            confirmed_transaction.transaction.meta.as_ref(),
-                            "  ",
-                            None,
-                            None,
-                        );
-                    }
-                    Err(err) => {
-                        error!("[*] Unable to get confirmed transaction details: {}", err)
-                    }
-                }
-            }
-            Some(Commands::CancelSettlePlaceAsk(arg)) => {
-                let signature = ob_client
-                    .cancel_settle_place_ask(arg.target_size_usdc_ask, arg.ask_price_jlp_usdc)
-                    .await?;
-                info!("\n[*] Transaction successful, signature: {:?}", signature);
-                match ob_client
-                    .rpc_client
-                    .fetch_transaction(&signature.ok_or("")?)
-                    .await
-                {
-                    Ok(confirmed_transaction) => {
-                        info!("\n{:?}", confirmed_transaction);
-                        println_transaction(
-                            &confirmed_transaction
-                                .transaction
-                                .transaction
-                                .decode()
-                                .expect("Successful decode"),
-                            confirmed_transaction.transaction.meta.as_ref(),
-                            "  ",
-                            None,
-                            None,
-                        );
-                    }
-                    Err(err) => {
-                        error!("[*] Unable to get confirmed transaction details: {}", err)
-                    }
-                }
-            }
-            Some(Commands::Consume(arg)) => {
-                let signature = ob_client
-                    .make_consume_events_instruction(Vec::new(), arg.limit)
-                    .await?;
-                info!("\n[*] Transaction successful, signature: {:?}", signature);
-                match ob_client.rpc_client.fetch_transaction(&signature).await {
-                    Ok(confirmed_transaction) => {
-                        info!("\n{:?}", confirmed_transaction);
-                        println_transaction(
-                            &confirmed_transaction
-                                .transaction
-                                .transaction
-                                .decode()
-                                .expect("Successful decode"),
-                            confirmed_transaction.transaction.meta.as_ref(),
-                            "  ",
-                            None,
-                            None,
-                        );
-                    }
-                    Err(err) => {
-                        error!("[*] Unable to get confirmed transaction details: {}", err)
-                    }
-                }
-            }
-            Some(Commands::ConsumePermissioned(arg)) => {
-                let signature = ob_client
-                    .make_consume_events_permissioned_instruction(Vec::new(), arg.limit)
-                    .await?;
-                info!("\n[*] Transaction successful, signature: {:?}", signature);
-                match ob_client.rpc_client.fetch_transaction(&signature).await {
-                    Ok(confirmed_transaction) => {
-                        info!("\n{:?}", confirmed_transaction);
-                        println_transaction(
-                            &confirmed_transaction
-                                .transaction
-                                .transaction
-                                .decode()
-                                .expect("Successful decode"),
-                            confirmed_transaction.transaction.meta.as_ref(),
-                            "  ",
-                            None,
-                            None,
-                        );
-                    }
-                    Err(err) => {
-                        error!("[*] Unable to get confirmed transaction details: {}", err)
-                    }
-                }
-            }
-            Some(Commands::Load(_arg)) => {
-                let l = ob_client.load_orders_for_owner().await?;
-                info!("\n[*] Found Program Accounts: {:?}", l);
-            }
-            Some(Commands::Find(_arg)) => {
-                // Todo: Decode accounts data
-                let result = ob_client
-                    .find_open_orders_accounts_for_owner(ob_client.open_orders.oo_key, 1000)
-                    .await?;
-                info!("\n[*] Found Open Orders Accounts: {:?}", result);
-            }
-            Some(Commands::Tui) => {
+            None => {
                 let _ = run_tui().await;
             }
-            None => println!(
-                "\x1b[1;91m{}\x1b[0m",
-                "Unknown command. Use '--help' for usage instructions."
-            ),
         };
     }
     Ok(())

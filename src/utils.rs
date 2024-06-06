@@ -104,26 +104,26 @@ pub fn get_unix_secs() -> u64 {
 ///
 /// ```rust
 /// use openbook::{pubkey::Pubkey, signature::Keypair, rpc_client::RpcClient};
-/// use openbook::tokens_and_markets::{get_market_name, get_program_id};
 /// use openbook::utils::{read_keypair, create_account_info_from_account};
-/// use openbook::state::MarketState;
-/// use openbook::tokens_and_markets::{DexVersion, Token};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL is not set in .env file");
 ///     let key_path = std::env::var("KEY_PATH").expect("KEY_PATH is not set in .env file");
 ///
-///     let program_id = get_program_id(DexVersion::default()).parse()?;
-///     let market_address = get_market_name(Token::USDC).0.parse()?;
-///
 ///     let rpc_client = RpcClient::new(rpc_url.clone());
 ///
-///     let mut account = rpc_client.get_account(&market_address).await?;
+///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+///
+///     let program_id = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX"
+///         .parse()
+///         .unwrap();
+///
+///     let mut account = rpc_client.get_account(&market_id).await?;
 ///
 ///     let account_info = create_account_info_from_account(
 ///         &mut account,
-///         &market_address,
+///         &market_id,
 ///         &program_id,
 ///         false,
 ///         false,
@@ -137,7 +137,7 @@ pub fn get_unix_secs() -> u64 {
 pub fn create_account_info_from_account<'a>(
     account: &'a mut Account,
     key: &'a Pubkey,
-    my_program_id: &'a Pubkey,
+    program_id: &'a Pubkey,
     is_signer: bool,
     is_writable: bool,
 ) -> AccountInfo<'a> {
@@ -147,7 +147,7 @@ pub fn create_account_info_from_account<'a>(
         is_writable,
         &mut account.lamports,
         &mut account.data,
-        my_program_id,
+        program_id,
         account.executable,
         account.rent_epoch,
     )

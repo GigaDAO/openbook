@@ -46,7 +46,7 @@ AUTHORS:
         ████████   
         █████      
 
-📖 A CLI, TUI and SDK to interact with the OpenBook market on the Solana blockchain.
+📖1️⃣2️⃣ A CLI, TUI and SDK to interact with OpenBook V1 and V2 markets on the Solana blockchain.
 
 FUNCTIONALITIES:
   - Place Limit Bid: Place a limit bid in the OpenBook market.
@@ -63,19 +63,19 @@ USAGE:
 
 EXAMPLES:
   Launch TUI:
-    openbook tui
+    openbook
 
-  Place a bid limit order:
-    openbook place -t 5.0 -s bid -b 5. -e -p 2.1
+  Place a bid limit order on openbook v1 market:
+    openbook v1 place -t 5.0 -s bid -b 5. -e -p 2.1
 
-  Place a ask limit order:
-    openbook place -t 5.0 -s ask -b 5. -e -p 2.1
+  Place a ask limit order on openbook v1 market:
+    openbook v1 place -t 5.0 -s ask -b 5. -e -p 2.1
 
-  Cancel all limit orders:
-    openbook cancel -e
+  Cancel all limit orders on openbook v1 market:
+    openbook v1 cancel -e
 
-  Settle balances:
-    openbook settle -e
+  Settle balances on openbook v1 market:
+    openbook v1 settle -e
 
 For more information, visit: github.com/gigadao/openbook
 "#
@@ -94,6 +94,38 @@ pub struct Cli {
 #[cfg(feature = "cli")]
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum Commands {
+    /// Select OpenBook v1.
+    V1(V1),
+    /// Select OpenBook v2.
+    V2(V2),
+}
+
+#[cfg(feature = "cli")]
+#[derive(Args, Debug, Clone, PartialEq)]
+pub struct V1 {
+    /// The market id to trade on.
+    #[arg(short, long, default_value_t = String::from("8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"))]
+    pub market_id: String,
+    /// The subcommand to execute.
+    #[command(subcommand)]
+    pub command: Option<V1ActionsCommands>,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Args, Debug, Clone, PartialEq)]
+pub struct V2 {
+    /// The market id to trade on.
+    #[arg(short, long, default_value_t = String::from("gQN1TNHiqj5x82ZQd7JZ8rm8WD4xwWtXxd4onReWZNK"))]
+    pub market_id: String,
+    /// The subcommand to execute.
+    #[command(subcommand)]
+    pub command: Option<V2ActionsCommands>,
+}
+
+/// Represents OpenBook V1 market actions subcommands.
+#[cfg(feature = "cli")]
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum V1ActionsCommands {
     /// Place a limit order.
     Place(Place),
     /// Cancel an order.
@@ -118,8 +150,14 @@ pub enum Commands {
     Find(Find),
     /// Fetch Market Info.
     Info(Info),
-    /// Open up a tui.
-    Tui,
+}
+
+/// Represents OpenBook V2 market actions subcommands.
+#[cfg(feature = "cli")]
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum V2ActionsCommands {
+    /// Fetch Market Info.
+    Info(Info),
 }
 
 /// Represents options for placing a limit order in the OpenBook market.

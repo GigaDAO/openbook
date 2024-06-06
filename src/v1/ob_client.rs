@@ -1,22 +1,22 @@
-use crate::{
+use crate::v1::{
     market::Market,
     orders::{OpenOrders, OpenOrdersCacheEntry, OrderReturnType},
+};
+use crate::{
     rpc::Rpc,
     rpc_client::RpcClient,
-    tokens_and_markets::{DexVersion, Token, SPL_TOKEN_ID},
-    traits::MarketInfo,
-    traits::OpenOrdersT,
     utils::{create_account_info_from_account, get_unix_secs, read_keypair, u64_slice_to_pubkey},
+    v1::traits::{MarketInfo, OpenOrdersT},
 };
+
 use anyhow::{Error, Result};
 use openbook_dex::{
     critbit::Slab,
     instruction::SelfTradeBehavior,
     matching::{OrderType, Side},
-    state::MarketState,
+    state::{Market as MarketAuth, MarketState},
 };
 use rand::random;
-use solana_client::{client_error::ClientError, rpc_config::RpcSendTransactionConfig};
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     compute_budget::ComputeBudgetInstruction,
@@ -24,7 +24,6 @@ use solana_sdk::{
     signature::{Signature, Signer},
     signer::keypair::Keypair,
     sysvar::{rent, slot_history::ProgramError},
-    transaction::Transaction,
 };
 use spl_associated_token_account::get_associated_token_address;
 use std::{
@@ -33,15 +32,20 @@ use std::{
     fmt::{Debug, Formatter},
     num::NonZeroU64,
     str::FromStr,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use tracing::{debug, error};
+use tracing::debug;
 
-/// OpenBook Client to interact with the OpenBook market and perform actions.
+pub static SPL_TOKEN_ID: &'static str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+pub static SRM_PROGRAM_ID: &'static str = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX";
+
+/// OpenBook v1 Client to interact with the OpenBook market and perform actions.
+#[derive(Clone)]
 pub struct OBClient {
     /// The keypair of the owner used for signing transactions related to the market.
-    pub owner: Keypair,
+    pub owner: Arc<Keypair>,
     /// The RPC client for interacting with the Solana blockchain.
     pub rpc_client: Rpc,
     /// The public key of the associated account holding the quote tokens.
@@ -58,7 +62,7 @@ pub struct OBClient {
 
 impl Debug for OBClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        writeln!(f, "OBClient {{")?;
+        writeln!(f, "OB_V1_Client {{")?;
         writeln!(f, "    owner: {:?}", self.owner.pubkey())?;
         writeln!(f, "    rpc_client: {:?}", self.rpc_client)?;
         writeln!(f, "    quote_ata: {:?}", self.quote_ata)?;
@@ -70,49 +74,60 @@ impl Debug for OBClient {
 }
 
 impl OBClient {
-    /// Initializes a new instance of the `OBClient` struct, representing an OpenBook client.
+    /// Initializes a new instance of the `OBClient` struct, representing an OpenBook V1 program client.
     ///
-    /// This method initializes the `OBClient` struct, containing information about the requested market,
-    /// having the base and quote mints. It fetches and stores all data about this OpenBook market.
-    /// Additionally, it includes information about the account associated with the wallet on the OpenBook market
-    /// (e.g., open orders, bids, asks, etc.).
+    /// This method initializes the `OBClient` struct, containing information about the requested market id.
+    /// It fetches and stores all data about this OpenBook market. Additionally, it includes information about
+    /// the account associated with the wallet on the OpenBook market (e.g., open orders, bids, asks, etc.).
     ///
     /// # Arguments
     ///
-    /// * `commitment` - Commitment configuration for transactions.
-    /// * `program_version` - Program dex version representing the market.
-    /// * `base_mint` - Base mint symbol.
-    /// * `quote_mint` - Quote mint symbol.
-    /// * `load` - Boolean indicating whether to load market data immediately.
-    /// * `cache_ts` - Timestamp for caching current open orders.
+    /// * `commitment` - Commitment configuration for transactions, determining the level of finality required.
+    /// * `market_id` - Public key (ID) of the market to fetch information about.
+    /// * `load` - Boolean indicating whether to load market data immediately after initialization.
+    /// * `cache_ts` - Timestamp for caching current open orders, used to manage the cache validity.
     ///
     /// # Returns
     ///
-    /// Returns a new instance of the `OBClient` struct initialized with the provided parameters.
+    /// Returns a `Result` wrapping a new instance of the `OBClient` struct initialized with the provided parameters,
+    /// or an `Error` if the initialization process fails.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     println!("Initialized OBClient: {:?}", ob_client);
     ///
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// # Business Logic
+    ///
+    /// 1. Retrieve necessary env vars, such as the `RPC_URL` and `KEY_PATH` path.
+    /// 2. Read the owner's keypair from the specified key path.
+    /// 3. Initialize the RPC client with the given commitment configuration.
+    /// 4. Fetch the market account information on chain.
+    /// 5. Load the market state and extract base and quote mints.
+    /// 6. Initialize the `Market` struct with fetched market information.
+    /// 7. Fetche associated token accounts (ATA) for the base and quote tokens.
+    /// 8. Initialize the open orders for the client.
+    /// 9. Populate the open orders cache.
+    /// 10. Load bids and asks information if the `load` parameter is set to `true`.
+    ///
     pub async fn new(
         commitment: CommitmentConfig,
-        program_version: DexVersion,
-        base_mint: Token,
-        quote_mint: Token,
+        market_id: Pubkey,
         load: bool,
         cache_ts: u128,
     ) -> Result<Self, Error> {
@@ -129,11 +144,46 @@ impl OBClient {
         let pub_owner_key = owner.pubkey().clone();
 
         let rpc_client = Rpc::new(rpc_client);
+
+        let mut account_1 = rpc_client.inner().get_account(&market_id).await?;
+        let mut account_2 = rpc_client.inner().get_account(&market_id).await?;
+        let account_info_1;
+        let account_info_2;
+        let program_id = SRM_PROGRAM_ID.parse().unwrap();
+        {
+            account_info_1 = create_account_info_from_account(
+                &mut account_1,
+                &market_id,
+                &program_id,
+                false,
+                false,
+            );
+            account_info_2 = create_account_info_from_account(
+                &mut account_2,
+                &market_id,
+                &program_id,
+                false,
+                false,
+            );
+        }
+        let market = MarketState::load(&account_info_1, &SRM_PROGRAM_ID.parse().unwrap(), false)?;
+        let market_auth =
+            MarketAuth::load(&account_info_2, &SRM_PROGRAM_ID.parse().unwrap(), false)?;
+        let default_auth = Default::default();
+        let events_authority = market_auth
+            .consume_events_authority()
+            .unwrap_or(&default_auth);
+
+        let base_mint = Pubkey::from(u64_slice_to_pubkey(market.coin_mint));
+        let quote_mint = Pubkey::from(u64_slice_to_pubkey(market.pc_mint));
+
         let market_info = Market::new(
             rpc_client.clone(),
-            program_version,
+            SRM_PROGRAM_ID.parse().unwrap(),
+            market_id,
             base_mint,
             quote_mint,
+            *events_authority,
             load,
         )
         .await?;
@@ -142,11 +192,10 @@ impl OBClient {
         let quote_ata =
             get_associated_token_address(&pub_owner_key.clone(), &market_info.quote_mint);
 
-        let owner_bytes = owner.to_bytes();
-        let cloned_owner = Keypair::from_bytes(&owner_bytes)?;
+        let cloned_owner = owner.insecure_clone();
         let open_orders = OpenOrders::new(
             rpc_client.clone(),
-            market_info.program_id,
+            SRM_PROGRAM_ID.parse().unwrap(),
             cloned_owner,
             market_info.market_address,
         )
@@ -163,7 +212,7 @@ impl OBClient {
         let mut ob_client = Self {
             rpc_client,
             market_info,
-            owner,
+            owner: owner.into(),
             quote_ata,
             base_ata,
             open_orders,
@@ -375,14 +424,15 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let result = ob_client.load_bids()?;
     ///
@@ -409,14 +459,15 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let result = ob_client.load_asks()?;
     ///
@@ -452,16 +503,17 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::matching::Side;
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let target_amount_quote = 5.0;
     ///     let side = Side::Bid; // or Side::Ask
@@ -545,8 +597,8 @@ impl OBClient {
         }
 
         let limit_price = NonZeroU64::new(limit_price_lots).unwrap();
-        let max_coin_qty = NonZeroU64::new(target_base_lots).unwrap(); // max wsol lots
-        let max_native_pc_qty_including_fees = NonZeroU64::new(target_quote_lots_w_fee).unwrap(); // max usdc lots + fees
+        let max_coin_qty = NonZeroU64::new(target_base_lots).unwrap();
+        let max_native_pc_qty_including_fees = NonZeroU64::new(target_quote_lots_w_fee).unwrap();
 
         let place_order_ix = openbook_dex::instruction::new_order(
             &self.market_info.market_address,
@@ -580,27 +632,9 @@ impl OBClient {
             return Ok(Some(OrderReturnType::Instructions(instructions)));
         }
 
-        let recent_hash = self
+        let (_, signature) = self
             .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-
-        let txn = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = false;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let signature = self
-            .rpc_client
-            .inner()
-            .send_transaction_with_config(&txn, config)
+            .send_and_confirm((*self.owner).insecure_clone(), instructions)
             .await?;
 
         Ok(Some(OrderReturnType::Signature(signature)))
@@ -625,16 +659,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     if let Some(ord_ret_type) = ob_client
     ///         .cancel_orders(true)
@@ -694,29 +729,12 @@ impl OBClient {
             return Ok(Some(OrderReturnType::Instructions(ixs)));
         }
 
-        let recent_hash = self
+        let (_, signature) = self
             .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-        let txn = Transaction::new_signed_with_payer(
-            &ixs,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
+            .send_and_confirm((*self.owner).insecure_clone(), ixs)
+            .await?;
 
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-
-        Ok(Some(OrderReturnType::Signature(
-            self.rpc_client
-                .inner()
-                .send_transaction_with_config(&txn, config)
-                .await?,
-        )))
+        Ok(Some(OrderReturnType::Signature(signature)))
     }
 
     /// Settles the balance for a user in the market.
@@ -738,16 +756,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     if let Some(ord_ret_type) = ob_client
     ///         .settle_balance(true)
@@ -787,28 +806,12 @@ impl OBClient {
             return Ok(Some(OrderReturnType::Instructions(instructions)));
         }
 
-        let recent_hash = self
+        let (_, signature) = self
             .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-        let txn = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
+            .send_and_confirm((*self.owner).insecure_clone(), instructions)
+            .await?;
 
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        Ok(Some(OrderReturnType::Signature(
-            self.rpc_client
-                .inner()
-                .send_transaction_with_config(&txn, config)
-                .await?,
-        )))
+        Ok(Some(OrderReturnType::Signature(signature)))
     }
 
     /// Creates a new transaction to match orders in the market.
@@ -828,28 +831,26 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
     ///
-    ///     let result = ob_client.make_match_orders_transaction(100).await?;
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
+    ///
+    ///     let result = ob_client.match_orders_transaction(100).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn make_match_orders_transaction(
-        &self,
-        limit: u16,
-    ) -> Result<Signature, ClientError> {
+    pub async fn match_orders_transaction(&self, limit: u16) -> Result<(bool, Signature)> {
         let ix = openbook_dex::instruction::match_orders(
             &self.market_info.program_id,
             &self.market_info.market_address,
@@ -865,26 +866,8 @@ impl OBClient {
 
         let instructions = vec![ix];
 
-        let recent_hash = self
-            .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-
-        let tx = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
         self.rpc_client
-            .inner()
-            .send_transaction_with_config(&tx, config)
+            .send_and_confirm((*self.owner).insecure_clone(), instructions)
             .await
     }
 
@@ -904,16 +887,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let target_size_usdc_ask = 0.5;
     ///     let target_size_usdc_bid = 1.0;
@@ -933,7 +917,7 @@ impl OBClient {
         target_size_usdc_bid: f64,
         bid_price_jlp_usdc: f64,
         ask_price_jlp_usdc: f64,
-    ) -> Result<Option<Signature>> {
+    ) -> Result<(bool, Signature)> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1013,36 +997,9 @@ impl OBClient {
             }
         }
 
-        // Build and send transaction
-        let recent_hash = self
-            .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-        let txn = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.owner.pubkey().to_string().clone();
-        match self
-            .rpc_client
-            .inner()
-            .send_transaction_with_config(&txn, config)
+        self.rpc_client
+            .send_and_confirm((*self.owner).insecure_clone(), instructions)
             .await
-        {
-            Ok(sign) => Ok(Some(sign)),
-            Err(err) => {
-                error!("[*] err combo'ing: {err}, {}", kp_str);
-                Ok(None)
-            }
-        }
     }
 
     /// Executes a combination of canceling all limit orders, settling balance, and placing a bid order.
@@ -1059,16 +1016,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let result = ob_client.cancel_settle_place_bid(1.5, 1.0).await?;
     ///
@@ -1081,7 +1039,7 @@ impl OBClient {
         &mut self,
         target_size_usdc_bid: f64,
         bid_price_jlp_usdc: f64,
-    ) -> Result<Option<Signature>> {
+    ) -> Result<(bool, Signature)> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1142,40 +1100,9 @@ impl OBClient {
             }
         }
 
-        // Build and send transaction
-        let recent_hash = self
-            .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-        let txn = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.owner.pubkey().to_string().clone();
-        match self
-            .rpc_client
-            .inner()
-            .send_transaction_with_config(&txn, config)
+        self.rpc_client
+            .send_and_confirm((*self.owner).insecure_clone(), instructions)
             .await
-        {
-            Ok(sign) => Ok(Some(sign)),
-            Err(err) => {
-                error!("[*] err bidding: {err}, {}", kp_str);
-                let e = err.get_transaction_error();
-                if let Some(e) = e {
-                    error!("[*] got tx err: {e}");
-                }
-                Ok(None)
-            }
-        }
     }
 
     /// Executes a combination of canceling all limit orders, settling balance, and placing an ask order.
@@ -1192,16 +1119,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let result = ob_client.cancel_settle_place_ask(1.5, 1.0).await?;
     ///
@@ -1214,7 +1142,7 @@ impl OBClient {
         &mut self,
         target_size_usdc_ask: f64,
         ask_price_jlp_usdc: f64,
-    ) -> Result<Option<Signature>> {
+    ) -> Result<(bool, Signature)> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1276,36 +1204,9 @@ impl OBClient {
             }
         }
 
-        // Build and send transaction
-        let recent_hash = self
-            .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-        let txn = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.owner.pubkey().to_string().clone();
-        match self
-            .rpc_client
-            .inner()
-            .send_transaction_with_config(&txn, config)
+        self.rpc_client
+            .send_and_confirm((*self.owner).insecure_clone(), instructions)
             .await
-        {
-            Ok(sign) => Ok(Some(sign)),
-            Err(err) => {
-                error!("[*] err asking: {err}, {}", kp_str);
-                Ok(None)
-            }
-        }
     }
 
     /// Executes a combination of canceling all limit orders and settling balance.
@@ -1317,16 +1218,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let result = ob_client.cancel_settle().await?;
     ///
@@ -1335,7 +1237,7 @@ impl OBClient {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn cancel_settle(&mut self) -> Result<Option<Signature>> {
+    pub async fn cancel_settle(&mut self) -> Result<(bool, Signature)> {
         let mut instructions = Vec::new();
 
         // Fetch recent prioritization fees
@@ -1377,37 +1279,9 @@ impl OBClient {
             }
         }
 
-        // Build and send transaction
-        let recent_hash = self
-            .rpc_client
-            .inner()
-            .get_latest_blockhash_with_commitment(self.rpc_client.inner().commitment())
-            .await?
-            .0;
-        let txn = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&self.owner.pubkey()),
-            &[&self.owner],
-            recent_hash,
-        );
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.skip_preflight = true;
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        let kp_str = self.owner.pubkey().to_string().clone();
-
-        match self
-            .rpc_client
-            .inner()
-            .send_transaction_with_config(&txn, config)
+        self.rpc_client
+            .send_and_confirm((*self.owner).insecure_clone(), instructions)
             .await
-        {
-            Ok(sign) => Ok(Some(sign)),
-            Err(err) => {
-                error!("[*] err canceling: {err}\npk: {}", kp_str);
-                Ok(None)
-            }
-        }
     }
 
     /// Consumes events from the market for specified open orders accounts.
@@ -1425,32 +1299,33 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let open_orders_accounts = vec![ob_client.open_orders.oo_key];
     ///     let limit = 10;
-    ///     let result = ob_client.make_consume_events_instruction(open_orders_accounts, limit).await?;
+    ///     let result = ob_client.consume_events_instruction(open_orders_accounts, limit).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn make_consume_events_instruction(
+    pub async fn consume_events_instruction(
         &self,
         open_orders_accounts: Vec<Pubkey>,
         limit: u16,
-    ) -> Result<Signature, ClientError> {
-        let consume_events_ix = openbook_dex::instruction::consume_events(
+    ) -> Result<(bool, Signature)> {
+        let ix = openbook_dex::instruction::consume_events(
             &self.market_info.program_id,
             open_orders_accounts.iter().collect(),
             &self.market_info.market_address,
@@ -1461,15 +1336,8 @@ impl OBClient {
         )
         .unwrap();
 
-        let tx =
-            Transaction::new_with_payer(&[consume_events_ix.clone()], Some(&self.owner.pubkey()));
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        config.skip_preflight = true;
         self.rpc_client
-            .inner()
-            .send_transaction_with_config(&tx, config)
+            .send_and_confirm((*self.owner).insecure_clone(), vec![ix])
             .await
     }
 
@@ -1487,54 +1355,45 @@ impl OBClient {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// ```rust , ignore
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let open_orders_accounts = vec![ob_client.open_orders.oo_key];
     ///     let limit = 10;
-    ///     let result = ob_client.make_consume_events_permissioned_instruction(open_orders_accounts, limit).await?;
+    ///     let result = ob_client.consume_events_permissioned_instruction(open_orders_accounts, limit).await?;
     ///
     ///     println!("{:?}", result);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn make_consume_events_permissioned_instruction(
+    pub async fn consume_events_permissioned_instruction(
         &self,
         open_orders_accounts: Vec<Pubkey>,
         limit: u16,
-    ) -> Result<Signature, ClientError> {
-        let consume_events_permissioned_ix =
-            openbook_dex::instruction::consume_events_permissioned(
-                &self.market_info.program_id,
-                open_orders_accounts.iter().collect(),
-                &self.market_info.market_address,
-                &self.market_info.event_queue,
-                &self.market_info.event_queue, // TODO: Update to consume_events_authority
-                limit,
-            )
-            .unwrap();
+    ) -> Result<(bool, Signature)> {
+        let ix = openbook_dex::instruction::consume_events_permissioned(
+            &self.market_info.program_id,
+            open_orders_accounts.iter().collect(),
+            &self.market_info.market_address,
+            &self.market_info.event_queue,
+            &self.market_info.events_authority,
+            limit,
+        )
+        .unwrap();
 
-        let tx = Transaction::new_with_payer(
-            &[consume_events_permissioned_ix.clone()],
-            Some(&self.owner.pubkey()),
-        );
-
-        let mut config = RpcSendTransactionConfig::default();
-        config.preflight_commitment = Some(self.rpc_client.inner().commitment().commitment);
-        config.skip_preflight = true;
         self.rpc_client
-            .inner()
-            .send_transaction_with_config(&tx, config)
+            .send_and_confirm((*self.owner).insecure_clone(), vec![ix])
             .await
     }
 
@@ -1551,16 +1410,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let result = ob_client.load_orders_for_owner().await?;
     ///
@@ -1596,16 +1456,17 @@ impl OBClient {
     /// # Examples
     ///
     /// ```rust
-    /// use openbook::orders::OrderReturnType;
+    /// use openbook::v1::orders::OrderReturnType;
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let open_orders_accounts = vec![];
     ///     let result = ob_client.filter_for_open_orders(ob_client.market_info.bids_address, ob_client.market_info.asks_address, open_orders_accounts);
@@ -1645,14 +1506,15 @@ impl OBClient {
     ///
     /// ```rust
     /// use openbook::commitment_config::CommitmentConfig;
-    /// use openbook::ob_client::OBClient;
-    /// use openbook::tokens_and_markets::{DexVersion, Token};
+    /// use openbook::v1::ob_client::OBClient;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let commitment = CommitmentConfig::confirmed();
     ///
-    ///     let mut ob_client = OBClient::new(commitment, DexVersion::default(), Token::JLP, Token::USDC, true, 1000).await?;
+    ///     let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6".parse()?;
+    ///
+    ///     let mut ob_client = OBClient::new(commitment, market_id, true, 1000).await?;
     ///
     ///     let result = ob_client.find_open_orders_accounts_for_owner(ob_client.open_orders.oo_key, 5000).await?;
     ///
@@ -1671,7 +1533,7 @@ impl OBClient {
             .expect("Time went backwards")
             .as_millis();
         if let Some(cache_entry) = self.open_orders_cache.get(&owner_address) {
-            if now - cache_entry.ts < cache_duration_ms.into() {
+            if now - cache_entry.ts < cache_duration_ms as u128 {
                 return Ok(cache_entry.open_orders.clone());
             }
         }

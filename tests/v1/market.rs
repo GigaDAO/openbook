@@ -1,8 +1,6 @@
-use openbook::market::Market;
+use openbook::v1::market::Market;
 use openbook::rpc::Rpc;
 use openbook::rpc_client::RpcClient;
-use openbook::tokens_and_markets::{DexVersion, Token};
-use openbook::traits::MarketInfo;
 
 #[tokio::test]
 async fn test_market_state_info() -> anyhow::Result<(), anyhow::Error> {
@@ -10,12 +8,15 @@ async fn test_market_state_info() -> anyhow::Result<(), anyhow::Error> {
 
     let rpc_client = Rpc::new(RpcClient::new(rpc_url));
 
+    let market_id = "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
+        .parse()
+        .unwrap();
+
     let market = Market::new(
         rpc_client,
-        DexVersion::default(),
-        Token::JLP,
-        Token::USDC,
+        market_id,
         true,
+        123456789,
     )
     .await?;
 
@@ -25,7 +26,7 @@ async fn test_market_state_info() -> anyhow::Result<(), anyhow::Error> {
     );
     assert_eq!(
         &market.market_address.to_string(),
-        "ASUyMMNBpFzpW3zDSPYdDVggKajq1DMKFFPK1JS9hoSR"
+        "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
     );
     assert_eq!(
         &market.event_queue.to_string(),
