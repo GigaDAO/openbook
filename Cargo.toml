@@ -1,6 +1,6 @@
 [package]
 name = "openbook"
-version = "0.0.12"
+version = "0.1.0"
 edition = "2021"
 description = "📖1️⃣2️⃣ A CLI, TUI and SDK to interact with OpenBook V1 and V2 markets on the Solana blockchain."
 license = "MIT"
