@@ -14,7 +14,7 @@
 | 🐧 Linux `(Recommended)` | 🪟 Windows |
 | :------: | :--------: |
 | ![Linux Banner](https://github.com/GigaDAO/openbook/assets/62179149/24912675-0f8e-4f5d-8933-56f47b9ba33b) | ![Windows Banner](https://github.com/GigaDAO/openbook/assets/62179149/c1874bab-300c-4867-a1f9-458fceb1efc2) |
-| Download Executable File | Download `.exe` File |
+| [Download Executable File](https://github.com/GigaDAO/openbook/releases/download/v0.1.0/openbook) | [Download `.exe` File](https://github.com/GigaDAO/openbook/releases/download/v0.1.0/openbook.exe) |
 | `cargo install openbook --all-features` | `cargo install openbook --all-features` |
 
 </div>
