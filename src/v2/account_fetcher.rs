@@ -8,7 +8,7 @@ use anyhow::Context;
 use anchor_client::ClientError;
 use anchor_lang::AccountDeserialize;
 
-use openbook_v2::state::OpenOrdersAccount;
+use openbookdex_v2::state::OpenOrdersAccount;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
     account::{AccountSharedData, ReadableAccount},

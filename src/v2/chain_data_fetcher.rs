@@ -6,7 +6,7 @@ use anyhow::Context;
 
 use anchor_lang::{AccountDeserialize, Discriminator};
 
-use openbook_v2::{accounts_zerocopy::LoadZeroCopy, state::OpenOrdersAccount};
+use openbookdex_v2::{accounts_zerocopy::LoadZeroCopy, state::OpenOrdersAccount};
 
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
