@@ -27,7 +27,7 @@ use solana_transaction_status::{EncodedConfirmedTransactionWithStatusMeta, UiTra
 use anchor_lang::{AccountDeserialize, Discriminator};
 
 #[cfg(feature = "v2")]
-use openbook_v2::state::OpenOrdersAccount;
+use openbookdex_v2::state::OpenOrdersAccount;
 
 #[cfg(feature = "v2")]
 use solana_client::{

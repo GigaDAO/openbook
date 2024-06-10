@@ -1,4 +1,4 @@
-use openbook_v2::state::{Market, FEES_SCALE_FACTOR};
+use openbookdex_v2::state::{Market, FEES_SCALE_FACTOR};
 use solana_sdk::pubkey::Pubkey;
 use std::convert::TryInto;
 

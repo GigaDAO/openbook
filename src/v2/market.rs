@@ -1,7 +1,7 @@
 use anyhow::Result;
 use borsh::{BorshDeserialize, BorshSerialize};
 use fixed::types::I80F48;
-use openbook_v2::{
+use openbookdex_v2::{
     accounts_zerocopy::KeyedAccountReader,
     error::OpenBookError,
     pubkey_option::NonZeroPubkeyOption,

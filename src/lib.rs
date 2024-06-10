@@ -28,4 +28,4 @@ pub use solana_sdk::signature;
 pub use solana_sdk::signer::keypair;
 
 #[cfg(feature = "v2")]
-pub use openbook_v2::state as v2_state;
+pub use openbookdex_v2::state as v2_state;

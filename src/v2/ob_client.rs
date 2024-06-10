@@ -14,7 +14,7 @@ use rand::random;
 use serde::{Deserialize, Serialize};
 use spl_associated_token_account::get_associated_token_address;
 
-use openbook_v2::{
+use openbookdex_v2::{
     state::{
         BookSide, Market, OpenOrdersAccount, OracleConfig, OracleConfigParams, PlaceOrderType,
         SelfTradeBehavior, Side,
@@ -386,10 +386,10 @@ impl OBClient {
     /// ```
     pub async fn settle_funds(&self) -> Result<(bool, Signature)> {
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::SettleFunds {
+                    &openbookdex_v2::accounts::SettleFunds {
                         owner: self.owner(),
                         penalty_payer: self.owner(),
                         open_orders_account: self.open_orders_account,
@@ -406,7 +406,7 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::SettleFunds {}),
+            data: anchor_lang::InstructionData::data(&openbookdex_v2::instruction::SettleFunds {}),
         };
         self.rpc_client
             .send_and_confirm((*self.owner).insecure_clone(), vec![ix])
@@ -455,10 +455,10 @@ impl OBClient {
         let oid = self.gen_order_id();
 
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::PlaceOrder {
+                    &openbookdex_v2::accounts::PlaceOrder {
                         open_orders_account: self.open_orders_account,
                         open_orders_admin: None,
                         signer: self.owner(),
@@ -475,7 +475,7 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrder {
+            data: anchor_lang::InstructionData::data(&openbookdex_v2::instruction::PlaceOrder {
                 args: PlaceOrderArgs {
                     side,
                     price_lots,
@@ -526,10 +526,10 @@ impl OBClient {
 
         // TODO: update to market order inst
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::PlaceOrder {
+                    &openbookdex_v2::accounts::PlaceOrder {
                         open_orders_account: self.open_orders_account,
                         open_orders_admin: None,
                         signer: self.owner(),
@@ -546,7 +546,7 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrder {
+            data: anchor_lang::InstructionData::data(&openbookdex_v2::instruction::PlaceOrder {
                 args: PlaceOrderArgs {
                     side,
                     price_lots,
@@ -589,10 +589,10 @@ impl OBClient {
     /// ```
     pub async fn cancel_limit_order(&self, order_id: u128) -> Result<(bool, Signature)> {
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::CancelOrder {
+                    &openbookdex_v2::accounts::CancelOrder {
                         open_orders_account: self.open_orders_account,
                         signer: self.owner(),
                         market: self.market_id,
@@ -602,7 +602,7 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CancelOrder {
+            data: anchor_lang::InstructionData::data(&openbookdex_v2::instruction::CancelOrder {
                 order_id,
             }),
         };
@@ -635,10 +635,10 @@ impl OBClient {
     /// ```
     pub async fn cancel_all(&self) -> Result<(bool, Signature)> {
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::CancelOrder {
+                    &openbookdex_v2::accounts::CancelOrder {
                         open_orders_account: self.open_orders_account,
                         signer: self.owner(),
                         market: self.market_id,
@@ -648,10 +648,12 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CancelAllOrders {
-                side_option: None,
-                limit: 255,
-            }),
+            data: anchor_lang::InstructionData::data(
+                &openbookdex_v2::instruction::CancelAllOrders {
+                    side_option: None,
+                    limit: 255,
+                },
+            ),
         };
 
         self.rpc_client
@@ -667,10 +669,10 @@ impl OBClient {
         let orders_type = PlaceOrderType::PostOnly;
 
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::CancelAllAndPlaceOrders {
+                    &openbookdex_v2::accounts::CancelAllAndPlaceOrders {
                         open_orders_account: self.open_orders_account,
                         signer: self.owner(),
                         open_orders_admin: self.market_info.open_orders_admin.into(),
@@ -690,7 +692,7 @@ impl OBClient {
                 )
             },
             data: anchor_lang::InstructionData::data(
-                &openbook_v2::instruction::CancelAllAndPlaceOrders {
+                &openbookdex_v2::instruction::CancelAllAndPlaceOrders {
                     orders_type,
                     bids,
                     asks,
@@ -726,7 +728,7 @@ impl OBClient {
     /// }
     /// ```
     pub async fn find_or_create_account(&self) -> Result<Pubkey> {
-        let program = openbook_v2::id();
+        let program = openbookdex_v2::id();
 
         let openbook_account_name = "random";
 
@@ -791,14 +793,14 @@ impl OBClient {
 
         let open_orders_indexer = Pubkey::find_program_address(
             &[b"OpenOrdersIndexer".as_ref(), owner.pubkey().as_ref()],
-            &openbook_v2::id(),
+            &openbookdex_v2::id(),
         )
         .0;
 
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: anchor_lang::ToAccountMetas::to_account_metas(
-                &openbook_v2::accounts::CreateOpenOrdersIndexer {
+                &openbookdex_v2::accounts::CreateOpenOrdersIndexer {
                     owner: owner.pubkey(),
                     open_orders_indexer,
                     payer: payer.pubkey(),
@@ -807,7 +809,7 @@ impl OBClient {
                 None,
             ),
             data: anchor_lang::InstructionData::data(
-                &openbook_v2::instruction::CreateOpenOrdersIndexer {},
+                &openbookdex_v2::instruction::CreateOpenOrdersIndexer {},
             ),
         };
 
@@ -857,7 +859,7 @@ impl OBClient {
 
         let open_orders_indexer = Pubkey::find_program_address(
             &[b"OpenOrdersIndexer".as_ref(), owner.pubkey().as_ref()],
-            &openbook_v2::id(),
+            &openbookdex_v2::id(),
         )
         .0;
 
@@ -867,14 +869,14 @@ impl OBClient {
                 owner.pubkey().as_ref(),
                 &account_num.to_le_bytes(),
             ],
-            &openbook_v2::id(),
+            &openbookdex_v2::id(),
         )
         .0;
 
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: anchor_lang::ToAccountMetas::to_account_metas(
-                &openbook_v2::accounts::CreateOpenOrdersAccount {
+                &openbookdex_v2::accounts::CreateOpenOrdersAccount {
                     owner: owner.pubkey(),
                     open_orders_indexer,
                     open_orders_account: account,
@@ -886,7 +888,7 @@ impl OBClient {
                 None,
             ),
             data: anchor_lang::InstructionData::data(
-                &openbook_v2::instruction::CreateOpenOrdersAccount {
+                &openbookdex_v2::instruction::CreateOpenOrdersAccount {
                     name: name.to_string(),
                 },
             ),
@@ -913,7 +915,7 @@ impl OBClient {
         &self,
         market_args: CreateMarketArgs,
     ) -> Result<(bool, Signature, Pubkey)> {
-        let program_id = openbook_v2::id();
+        let program_id = openbookdex_v2::id();
 
         let market = Keypair::new().pubkey();
 
@@ -945,7 +947,7 @@ impl OBClient {
             program_id: program_id,
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::CreateMarket {
+                    &openbookdex_v2::accounts::CreateMarket {
                         market,
                         market_authority,
                         bids,
@@ -964,14 +966,14 @@ impl OBClient {
                         consume_events_admin: market_args.consume_events_admin,
                         close_market_admin: market_args.close_market_admin,
                         event_authority,
-                        program: openbook_v2::id(),
+                        program: openbookdex_v2::id(),
                         token_program: Token::id(),
                         associated_token_program: AssociatedToken::id(),
                     },
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CreateMarket {
+            data: anchor_lang::InstructionData::data(&openbookdex_v2::instruction::CreateMarket {
                 name: market_args.name,
                 oracle_config,
                 base_lot_size: market_args.base_lot_size,
@@ -1009,10 +1011,10 @@ impl OBClient {
         self_trade_behavior: SelfTradeBehavior,
     ) -> Result<(bool, Signature)> {
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::PlaceOrder {
+                    &openbookdex_v2::accounts::PlaceOrder {
                         open_orders_account: self.open_orders_account,
                         open_orders_admin: None,
                         signer: self.owner(),
@@ -1029,20 +1031,22 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::PlaceOrderPegged {
-                args: PlaceOrderPeggedArgs {
-                    side,
-                    price_offset_lots,
-                    peg_limit,
-                    max_base_lots,
-                    max_quote_lots_including_fees,
-                    client_order_id,
-                    order_type,
-                    expiry_timestamp,
-                    self_trade_behavior,
-                    limit,
+            data: anchor_lang::InstructionData::data(
+                &openbookdex_v2::instruction::PlaceOrderPegged {
+                    args: PlaceOrderPeggedArgs {
+                        side,
+                        price_offset_lots,
+                        peg_limit,
+                        max_base_lots,
+                        max_quote_lots_including_fees,
+                        client_order_id,
+                        order_type,
+                        expiry_timestamp,
+                        self_trade_behavior,
+                        limit,
+                    },
                 },
-            }),
+            ),
         };
 
         self.rpc_client
@@ -1062,10 +1066,10 @@ impl OBClient {
         market_quote_vault: Pubkey,
     ) -> Result<(bool, Signature)> {
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::Deposit {
+                    &openbookdex_v2::accounts::Deposit {
                         open_orders_account: self.open_orders_account,
                         owner: self.owner(),
                         market: market_address,
@@ -1078,7 +1082,7 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::Deposit {
+            data: anchor_lang::InstructionData::data(&openbookdex_v2::instruction::Deposit {
                 base_amount,
                 quote_amount,
             }),
@@ -1112,10 +1116,10 @@ impl OBClient {
     /// ```
     pub async fn consume_events(&self, limit: usize) -> Result<(bool, Signature)> {
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: openbookdex_v2::id(),
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
-                    &openbook_v2::accounts::ConsumeEvents {
+                    &openbookdex_v2::accounts::ConsumeEvents {
                         consume_events_admin: self.market_info.consume_events_admin.into(),
                         market: self.market_id,
                         event_heap: self.market_info.event_heap,
@@ -1123,7 +1127,7 @@ impl OBClient {
                     None,
                 )
             },
-            data: anchor_lang::InstructionData::data(&openbook_v2::instruction::ConsumeEvents {
+            data: anchor_lang::InstructionData::data(&openbookdex_v2::instruction::ConsumeEvents {
                 limit,
             }),
         };

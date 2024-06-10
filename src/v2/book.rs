@@ -4,7 +4,7 @@ use anchor_lang::prelude::Pubkey;
 use anyhow::Result;
 use fixed::types::I80F48;
 use itertools::Itertools;
-use openbook_v2::state::{
+use openbookdex_v2::state::{
     Market, Orderbook, Side, DROP_EXPIRED_ORDER_LIMIT, FILL_EVENT_REMAINING_LIMIT,
 };
 
