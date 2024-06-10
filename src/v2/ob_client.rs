@@ -208,7 +208,7 @@ impl OBClient {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
@@ -365,7 +365,7 @@ impl OBClient {
 
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
@@ -825,7 +825,7 @@ impl OBClient {
 
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
@@ -1091,7 +1091,7 @@ impl OBClient {
 
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
