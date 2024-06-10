@@ -11,6 +11,8 @@
 [![docs](https://docs.rs/openbook/badge.svg)](https://docs.rs/openbook/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+[![GigaDAO Discord](https://dcbadge.limes.pink/api/server/gigadao)](https://discord.gg/gigadao)
+
 | 🐧 Linux `(Recommended)` | 🪟 Windows |
 | :------: | :--------: |
 | ![Linux Banner](https://github.com/GigaDAO/openbook/assets/62179149/24912675-0f8e-4f5d-8933-56f47b9ba33b) | ![Windows Banner](https://github.com/GigaDAO/openbook/assets/62179149/c1874bab-300c-4867-a1f9-458fceb1efc2) |
