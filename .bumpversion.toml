@@ -9,6 +9,3 @@ replace = 'version = "{new_version}"'
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
-[bumpversion:file:README.md]
-search = 'openbook = "{current_version}"'
-replace = 'openbook = "{new_version}"'

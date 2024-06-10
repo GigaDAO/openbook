@@ -8,6 +8,7 @@ use std::{
 use anchor_lang::{prelude::System, Id};
 use anchor_spl::{associated_token::AssociatedToken, token::Token};
 use anyhow::{Context, Error, Result};
+use borsh::{BorshDeserialize, BorshSerialize};
 use fixed::types::I80F48;
 use rand::random;
 use serde::{Deserialize, Serialize};
@@ -15,8 +16,8 @@ use spl_associated_token_account::get_associated_token_address;
 
 use openbook_v2::{
     state::{
-        BookSide, Market, OpenOrdersAccount, OracleConfigParams, PlaceOrderType, SelfTradeBehavior,
-        Side,
+        BookSide, Market, OpenOrdersAccount, OracleConfig, OracleConfigParams, PlaceOrderType,
+        SelfTradeBehavior, Side,
     },
     PlaceMultipleOrdersArgs, PlaceOrderArgs, PlaceOrderPeggedArgs,
 };
@@ -40,10 +41,11 @@ use crate::{
             RpcAccountFetcher,
         },
         context::MarketContext,
+        market::{CreateMarketArgs, MarketInfo},
     },
 };
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, BorshDeserialize, BorshSerialize)]
 pub struct OpenOrderNode {
     pub is_buy: bool,
     pub price: f64,
@@ -66,19 +68,33 @@ impl Debug for OpenOrderNode {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Default, BorshDeserialize, BorshSerialize)]
 pub struct OpenOrderState {
-    pub base_in_oos: f64,
-    pub quote_in_oos: f64,
+    pub asks_base_in_oos: f64,
+    pub bids_base_in_oos: f64,
+    pub base_free_in_oos: f64,
+    pub quote_free_in_oos: f64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+impl Debug for OpenOrderState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        writeln!(f, "OpenOrderState {{")?;
+        writeln!(f, "    asks base in oos: {:?}", self.asks_base_in_oos)?;
+        writeln!(f, "    bids base in oos: {:?}", self.bids_base_in_oos)?;
+        writeln!(f, "    base free in oos: {:?}", self.base_free_in_oos)?;
+        writeln!(f, "    quote free in oos: {:?}", self.quote_free_in_oos)?;
+        writeln!(f, "}}")
+    }
+}
+
+#[derive(Debug, Clone, BorshDeserialize, BorshSerialize)]
 pub struct BestQuotes {
     pub highest_bid: f64,
     pub lowest_ask: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct PricePoint {
     pub id: String,
     pub mint_symbol: String,
@@ -86,17 +102,28 @@ pub struct PricePoint {
     pub vs_token_symbol: String,
     pub price: f64,
 }
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PriceData {
     pub data: HashMap<String, PricePoint>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Default, Clone, BorshDeserialize, BorshSerialize)]
 pub struct AtaBalances {
     pub quote_balance: f64,
     pub base_balance: f64,
     pub total_balance: f64,
     pub price: f64,
+}
+
+impl Debug for AtaBalances {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        writeln!(f, "AtaBalances {{")?;
+        writeln!(f, "    quote balance: {:?}", self.quote_balance)?;
+        writeln!(f, "    base balance: {:?}", self.base_balance)?;
+        writeln!(f, "    total balance: {:?}", self.total_balance)?;
+        writeln!(f, "    price: {:?}", self.price)?;
+        writeln!(f, "}}")
+    }
 }
 
 /// OpenBook v2 Client to interact with the OpenBook market and perform actions.
@@ -130,10 +157,16 @@ pub struct OBClient {
     pub open_orders: Vec<OpenOrderNode>,
 
     /// Information about the OpenBook market.
-    pub market_info: Market,
+    pub market_info: MarketInfo,
 
     /// Context information for the market.
     pub context: MarketContext,
+
+    /// Open Orders Account State.
+    pub oo_state: OpenOrderState,
+
+    /// Associated Token Accounts Balances, aka equity.
+    pub ata_balances: AtaBalances,
 }
 
 impl Debug for OBClient {
@@ -147,6 +180,9 @@ impl Debug for OBClient {
         writeln!(f, "    market_info: {:?}", self.market_info)?;
         writeln!(f, "    market_id: {:?}", self.market_id)?;
         writeln!(f, "    index_account: {:?}", self.index_account)?;
+        writeln!(f, "    open_orders_account: {:?}", self.open_orders_account)?;
+        writeln!(f, "    oo_state: {:?}", self.oo_state)?;
+        writeln!(f, "    ata_balances: {:?}", self.ata_balances)?;
         writeln!(f, "}}")
     }
 }
@@ -172,7 +208,7 @@ impl OBClient {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
@@ -196,7 +232,7 @@ impl OBClient {
     /// 2. Read the owner's keypair from the specified key path.
     /// 3. Initialize the RPC client with the given commitment configuration.
     /// 4. Fetch the market information from the Solana blockchain.
-    /// 5. Generate associated token addresses (ATA) for the base and quote tokens.
+    /// 5. Generate associated token accounts (ATA) for the base and quote tokens.
     /// 6. Initialize the context with market information.
     /// 7. Initialize the account fetcher for fetching account data.
     /// 8. Populate the initial fields of the `OBClient` struct.
@@ -225,17 +261,18 @@ impl OBClient {
 
         let rpc = Rpc::new(rpc_client);
 
-        let market_info = rpc.fetch_anchor_account::<Market>(&market_id).await?;
+        let market = rpc.fetch_anchor_account::<Market>(&market_id).await?;
 
-        let base_ata = get_associated_token_address(&pub_owner_key.clone(), &market_info.base_mint);
-        let quote_ata =
-            get_associated_token_address(&pub_owner_key.clone(), &market_info.quote_mint);
+        let base_ata = get_associated_token_address(&pub_owner_key.clone(), &market.base_mint);
+        let quote_ata = get_associated_token_address(&pub_owner_key.clone(), &market.quote_mint);
 
         let index_account = Default::default();
         let open_orders_account = Default::default();
+        let oo_state = Default::default();
+        let ata_balances = Default::default();
 
         let context = MarketContext {
-            market: market_info,
+            market: market,
             address: market_id,
         };
         let rpc_client = RpcClient::new_with_commitment(rpc_url.clone(), commitment);
@@ -243,6 +280,47 @@ impl OBClient {
         let account_fetcher = Arc::new(CachedAccountFetcher::new(Arc::new(RpcAccountFetcher {
             rpc: rpc_client,
         })));
+
+        let oracle_config = OracleConfig {
+            conf_filter: market.oracle_config.conf_filter,
+            max_staleness_slots: market.oracle_config.max_staleness_slots,
+            reserved: market.oracle_config.reserved,
+        };
+
+        let market_info = MarketInfo {
+            name: market.name().to_string(),
+            base_decimals: market.base_decimals,
+            quote_decimals: market.quote_decimals,
+            market_authority: market.market_authority,
+            collect_fee_admin: market.collect_fee_admin,
+            open_orders_admin: market.open_orders_admin,
+            consume_events_admin: market.consume_events_admin,
+            close_market_admin: market.close_market_admin,
+            bids: market.bids,
+            asks: market.asks,
+            event_heap: market.event_heap,
+            oracle_a: market.oracle_a,
+            oracle_b: market.oracle_b,
+            oracle_config: oracle_config,
+            quote_lot_size: market.quote_lot_size,
+            base_lot_size: market.base_lot_size,
+            seq_num: market.seq_num,
+            registration_time: market.registration_time,
+            maker_fee: market.maker_fee,
+            taker_fee: market.taker_fee,
+            fees_accrued: market.fees_accrued,
+            fees_to_referrers: market.fees_to_referrers,
+            referrer_rebates_accrued: market.referrer_rebates_accrued,
+            fees_available: market.fees_available,
+            maker_volume: market.maker_volume,
+            taker_volume_wo_oo: market.taker_volume_wo_oo,
+            base_mint: market.base_mint,
+            quote_mint: market.quote_mint,
+            market_base_vault: market.market_base_vault,
+            base_deposit_total: market.base_deposit_total,
+            market_quote_vault: market.market_quote_vault,
+            quote_deposit_total: market.quote_deposit_total,
+        };
 
         let mut ob_client = Self {
             rpc_client: rpc,
@@ -256,24 +334,30 @@ impl OBClient {
             open_orders_account,
             context,
             open_orders: vec![],
+            oo_state,
+            ata_balances,
         };
 
-        if !orders_key.is_err() {
-            ob_client.open_orders_account = orders_key.unwrap();
-        }
-
-        if !index_key.is_err() {
-            ob_client.index_account = index_key.unwrap();
+        if new {
+            ob_client.index_account = ob_client.create_open_orders_indexer(true).await?.3;
+            ob_client.open_orders_account = ob_client.find_or_create_account().await?;
         }
 
         if load {
+            if !orders_key.is_err() {
+                ob_client.open_orders_account = orders_key.unwrap();
+            } else {
+                ob_client.open_orders_account = ob_client.find_or_create_account().await?;
+            }
+            if !index_key.is_err() {
+                ob_client.index_account = index_key.unwrap();
+            } else {
+                ob_client.index_account = ob_client.create_open_orders_indexer(false).await?.3;
+            }
             let (open_orders, _best_quotes) = ob_client.load_bids_asks_info().await?;
             ob_client.open_orders = open_orders;
-        }
-
-        if new {
-            ob_client.index_account = ob_client.create_open_orders_indexer().await?.2;
-            ob_client.open_orders_account = ob_client.find_or_create_account().await?;
+            ob_client.oo_state = ob_client.load_oo_state().await?;
+            ob_client.ata_balances = ob_client.get_base_quote_total().await?;
         }
 
         Ok(ob_client)
@@ -281,7 +365,7 @@ impl OBClient {
 
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
@@ -364,14 +448,11 @@ impl OBClient {
             .max_quote_lots_including_maker_fees_from_usd(quote_size);
         let base_size = self.get_base_size_from_quote(quote_size, limit_price);
         let max_base_lots = self.context.max_base_lots_from_usd(base_size);
-        let ata = match side {
-            Side::Bid => self.quote_ata.clone(),
-            Side::Ask => self.base_ata.clone(),
-        };
+        let ata = self.get_ata_by_side(side);
         let vault = self.market_info.get_vault_by_side(side);
 
         tracing::debug!("base: {max_base_lots}, quote: {max_quote_lots}");
-        let oid = random::<u64>();
+        let oid = self.gen_order_id();
 
         let ix = Instruction {
             program_id: openbook_v2::id(),
@@ -437,14 +518,11 @@ impl OBClient {
             .max_quote_lots_including_maker_fees_from_usd(quote_size);
         let base_size = self.get_base_size_from_quote(quote_size, limit_price);
         let max_base_lots = self.context.max_base_lots_from_usd(base_size);
-        let ata = match side {
-            Side::Bid => self.quote_ata.clone(),
-            Side::Ask => self.base_ata.clone(),
-        };
+        let ata = self.get_ata_by_side(side);
         let vault = self.market_info.get_vault_by_side(side);
 
         tracing::debug!("base: {max_base_lots}, quote: {max_quote_lots}");
-        let oid = random::<u64>();
+        let oid = self.gen_order_id();
 
         // TODO: update to market order inst
         let ix = Instruction {
@@ -674,10 +752,11 @@ impl OBClient {
             .rpc_client
             .fetch_openbook_accounts(program, self.owner())
             .await?;
+
         let index = openbook_account_tuples
             .iter()
             .position(|tuple| tuple.1.name() == openbook_account_name)
-            .unwrap();
+            .unwrap_or(0);
 
         Ok(openbook_account_tuples[index].0)
     }
@@ -696,14 +775,17 @@ impl OBClient {
     ///
     ///     let ob_client = OBClient::new(commitment, market_id, false, true).await?;
     ///
-    ///     let indexer = ob_client.create_open_orders_indexer().await?;
+    ///     let indexer = ob_client.create_open_orders_indexer().await?.3;
     ///
-    ///     println!("Got Indexer: {:?}", indexer);
+    ///     println!("Got Indexer Account: {:?}", indexer);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn create_open_orders_indexer(&self) -> Result<(bool, Signature, Pubkey)> {
+    pub async fn create_open_orders_indexer(
+        &self,
+        execute: bool,
+    ) -> Result<(bool, Instruction, Signature, Pubkey)> {
         let owner = &self.owner;
         let payer = &self.owner;
 
@@ -729,17 +811,21 @@ impl OBClient {
             ),
         };
 
-        let (confirmed, sig) = self
-            .rpc_client
-            .send_and_confirm((*self.owner).insecure_clone(), vec![ix])
-            .await?;
+        let mut sig = Signature::default();
+        let mut confirmed = false;
+        if execute {
+            (confirmed, sig) = self
+                .rpc_client
+                .send_and_confirm((*self.owner).insecure_clone(), vec![ix.clone()])
+                .await?;
+        }
 
-        Ok((confirmed, sig, open_orders_indexer))
+        Ok((confirmed, ix, sig, open_orders_indexer))
     }
 
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
@@ -823,33 +909,40 @@ impl OBClient {
             .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_market(
         &self,
-        market: Pubkey,
-        market_authority: Pubkey,
-        bids: Pubkey,
-        asks: Pubkey,
-        event_heap: Pubkey,
-        base_mint: Pubkey,
-        quote_mint: Pubkey,
-        oracle_a: Option<Pubkey>,
-        oracle_b: Option<Pubkey>,
-        collect_fee_admin: Pubkey,
-        open_orders_admin: Option<Pubkey>,
-        consume_events_admin: Option<Pubkey>,
-        close_market_admin: Option<Pubkey>,
-        event_authority: Pubkey,
-        name: String,
-        oracle_config: OracleConfigParams,
-        base_lot_size: i64,
-        quote_lot_size: i64,
-        maker_fee: i64,
-        taker_fee: i64,
-        time_expiry: i64,
-    ) -> Result<(bool, Signature)> {
+        market_args: CreateMarketArgs,
+    ) -> Result<(bool, Signature, Pubkey)> {
+        let program_id = openbook_v2::id();
+
+        let market = Keypair::new().pubkey();
+
+        let oracle_config = OracleConfigParams {
+            conf_filter: 0.069,
+            max_staleness_slots: Some(69),
+        };
+
+        let event_authority_slice = &[b"__event_authority".as_ref()];
+
+        let (event_authority, _bump_seed) =
+            Pubkey::find_program_address(event_authority_slice, &program_id);
+
+        let market_seeds = &[b"Market".as_ref(), &market.to_bytes()];
+
+        let (market_authority, _bump_seed) =
+            Pubkey::find_program_address(market_seeds, &program_id);
+
+        let market_base_vault =
+            get_associated_token_address(&market_authority, &market_args.base_mint);
+        let market_quote_vault =
+            get_associated_token_address(&market_authority, &market_args.quote_mint);
+
+        let event_heap = Keypair::new().pubkey();
+        let asks = Keypair::new().pubkey();
+        let bids = Keypair::new().pubkey();
+
         let ix = Instruction {
-            program_id: openbook_v2::id(),
+            program_id: program_id,
             accounts: {
                 anchor_lang::ToAccountMetas::to_account_metas(
                     &openbook_v2::accounts::CreateMarket {
@@ -859,17 +952,17 @@ impl OBClient {
                         asks,
                         event_heap,
                         payer: self.owner(),
-                        market_base_vault: self.base_ata,
-                        market_quote_vault: self.quote_ata,
-                        base_mint,
-                        quote_mint,
+                        market_base_vault,
+                        market_quote_vault,
+                        base_mint: market_args.base_mint,
+                        quote_mint: market_args.quote_mint,
                         system_program: solana_sdk::system_program::id(),
-                        oracle_a,
-                        oracle_b,
-                        collect_fee_admin,
-                        open_orders_admin,
-                        consume_events_admin,
-                        close_market_admin,
+                        oracle_a: market_args.oracle_a,
+                        oracle_b: market_args.oracle_b,
+                        collect_fee_admin: market_args.collect_fee_admin,
+                        open_orders_admin: market_args.open_orders_admin,
+                        consume_events_admin: market_args.consume_events_admin,
+                        close_market_admin: market_args.close_market_admin,
                         event_authority,
                         program: openbook_v2::id(),
                         token_program: Token::id(),
@@ -879,19 +972,22 @@ impl OBClient {
                 )
             },
             data: anchor_lang::InstructionData::data(&openbook_v2::instruction::CreateMarket {
-                name,
+                name: market_args.name,
                 oracle_config,
-                base_lot_size,
-                quote_lot_size,
-                maker_fee,
-                taker_fee,
-                time_expiry,
+                base_lot_size: market_args.base_lot_size,
+                quote_lot_size: market_args.quote_lot_size,
+                maker_fee: market_args.maker_fee,
+                taker_fee: market_args.taker_fee,
+                time_expiry: market_args.time_expiry,
             }),
         };
 
-        self.rpc_client
+        let (confirmed, sig) = self
+            .rpc_client
             .send_and_confirm((*self.owner).insecure_clone(), vec![ix])
-            .await
+            .await?;
+
+        Ok((confirmed, sig, market))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -995,7 +1091,7 @@ impl OBClient {
 
     /// # Example
     ///
-    /// ```rust
+    /// ```rust , ignore
     /// use openbook::commitment_config::CommitmentConfig;
     /// use openbook::v2::ob_client::OBClient;
     ///
@@ -1037,27 +1133,6 @@ impl OBClient {
             .await
     }
 
-    pub async fn get_equity(&self) -> Result<(f64, f64)> {
-        let ba = &self.base_ata;
-        let qa = &self.quote_ata;
-
-        let bb = self
-            .rpc_client
-            .inner()
-            .get_token_account_balance(ba)
-            .await?
-            .ui_amount
-            .unwrap();
-        let qb = self
-            .rpc_client
-            .inner()
-            .get_token_account_balance(qa)
-            .await?
-            .ui_amount
-            .unwrap();
-
-        Ok((bb, qb))
-    }
     pub fn native_price_to_lots_price(&self, limit_price: f64) -> i64 {
         let base_decimals = self.market_info.base_decimals as u32;
         let quote_decimals = self.market_info.quote_decimals as u32;
@@ -1149,28 +1224,34 @@ impl OBClient {
     }
 
     pub async fn load_oo_state(&self) -> Result<OpenOrderState> {
-        let result = self.load_oo_balances().await?;
-        println!("got (base, quote) bals: {:?}", result);
+        let open_orders_account = self.openorders_account().await?;
+
+        let asks_base_lots = open_orders_account.position.asks_base_lots;
+        let base_decimals = self.market_info.base_decimals;
+        let base_decimals_factor = 10_i64.pow(base_decimals as u32) as f64;
+        let base_lots_factor = self.market_info.base_lot_size as f64;
+        let lots_2_native_factor = base_lots_factor / base_decimals_factor;
+        let asks_base_ui_amount = asks_base_lots as f64 * lots_2_native_factor;
+
+        let bids_quote_lots = open_orders_account.position.bids_quote_lots;
+        let quote_decimals = self.market_info.quote_decimals;
+        let quote_decimals_factor = 10_i64.pow(quote_decimals as u32) as f64;
+        let quote_lots_factor = self.market_info.quote_lot_size as f64;
+        let lots_2_native_factor = quote_lots_factor / quote_decimals_factor;
+        let bids_base_ui_amount = bids_quote_lots as f64 * lots_2_native_factor;
+
+        let base_free_native = open_orders_account.position.base_free_native;
+        let base_free_ui = base_free_native as f64 / base_decimals_factor;
+
+        let quote_free_native = open_orders_account.position.quote_free_native;
+        let quote_free_ui = quote_free_native as f64 / quote_decimals_factor;
 
         Ok(OpenOrderState {
-            base_in_oos: result.0,
-            quote_in_oos: result.1,
+            asks_base_in_oos: asks_base_ui_amount,
+            bids_base_in_oos: bids_base_ui_amount,
+            base_free_in_oos: base_free_ui,
+            quote_free_in_oos: quote_free_ui,
         })
-    }
-
-    pub async fn load_oo_balances(&self) -> Result<(f64, f64)> {
-        let open_orders_account = self.openorders_account().await?;
-        let asks_native_price = self
-            .market_info
-            .lot_to_native_price(open_orders_account.position.asks_base_lots);
-        let asks_base_total: f64 = I80F48::to_num::<f64>(asks_native_price) * 1000.;
-
-        let bids_native_price = self
-            .market_info
-            .lot_to_native_price(open_orders_account.position.bids_base_lots);
-        let bids_base_total: f64 = I80F48::to_num::<f64>(bids_native_price) * 1000.;
-
-        Ok((bids_base_total, asks_base_total))
     }
 
     pub async fn get_token_balance(&self, ata: &Pubkey) -> Result<f64> {
@@ -1195,6 +1276,17 @@ impl OBClient {
             total_balance: quote_balance + (price * base_balance),
             price,
         })
+    }
+
+    pub fn get_ata_by_side(&self, side: Side) -> Pubkey {
+        match side {
+            Side::Bid => self.quote_ata,
+            Side::Ask => self.base_ata,
+        }
+    }
+
+    pub fn gen_order_id(&self) -> u64 {
+        random::<u64>()
     }
 }
 

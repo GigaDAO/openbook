@@ -13,11 +13,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         use openbook::cli::{Cli, Commands, V1ActionsCommands, V2ActionsCommands};
         use openbook::commitment_config::CommitmentConfig;
         use openbook::matching::Side;
+        use tokio::time::{sleep, Duration};
+
         use openbook::tui::run_tui;
+        #[cfg(feature = "v2")]
+        use openbook::tui::SdkVersion;
         #[cfg(feature = "v1")]
         use openbook::v1::{ob_client::OBClient as OBV1Client, orders::OrderReturnType};
         #[cfg(feature = "v2")]
         use openbook::v2::ob_client::OBClient as OBV2Client;
+        use openbook::v2_state::Side as V2Side;
         use solana_cli_output::display::println_transaction;
         use tracing::{error, info};
         use tracing_subscriber::{filter, fmt};
@@ -36,6 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let args = Cli::parse();
 
+        const CRANK_DELAY_MS: u64 = 50_000;
+
         match args.command {
             Some(Commands::V1(cmd)) => {
                 let mut ob_client_v1 = OBV1Client::new(
@@ -50,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         info!("\n[*] {:?}", ob_client_v1);
                     }
                     Some(V1ActionsCommands::Place(arg)) => {
-                        let side = match arg.side.as_str() {
+                        let side = match arg.side.to_ascii_lowercase().as_str() {
                             "bid" => Side::Bid,
                             "ask" => Side::Ask,
                             _ => Side::Bid,
@@ -75,6 +82,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         "\n[*] Transaction successful, signature: {:?}",
                                         signature
                                     );
+                                    // wait for the tx to be cranked
+                                    sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                                     match ob_client_v1
                                         .rpc_client
                                         .fetch_transaction(&signature)
@@ -113,6 +122,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         "\n[*] Transaction successful, signature: {:?}",
                                         signature
                                     );
+                                    // wait for the tx to be cranked
+                                    sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                                     match ob_client_v1
                                         .rpc_client
                                         .fetch_transaction(&signature)
@@ -152,6 +163,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         "\n[*] Transaction successful, signature: {:?}",
                                         signature
                                     );
+                                    // wait for the tx to be cranked
+                                    sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                                     match ob_client_v1
                                         .rpc_client
                                         .fetch_transaction(&signature)
@@ -183,6 +196,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let (_confirmed, signature) =
                             ob_client_v1.match_orders_transaction(arg.limit).await?;
                         info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        // wait for the tx to be cranked
+                        sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                         match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
                             Ok(confirmed_transaction) => {
                                 info!("\n{:?}", confirmed_transaction);
@@ -213,6 +228,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             )
                             .await?;
                         info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        // wait for the tx to be cranked
+                        sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                         match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
                             Ok(confirmed_transaction) => {
                                 info!("\n{:?}", confirmed_transaction);
@@ -241,6 +258,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             )
                             .await?;
                         info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        // wait for the tx to be cranked
+                        sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                         match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
                             Ok(confirmed_transaction) => {
                                 info!("\n{:?}", confirmed_transaction);
@@ -269,6 +288,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             )
                             .await?;
                         info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        // wait for the tx to be cranked
+                        sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                         match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
                             Ok(confirmed_transaction) => {
                                 info!("\n{:?}", confirmed_transaction);
@@ -294,6 +315,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .consume_events_instruction(Vec::new(), arg.limit)
                             .await?;
                         info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        // wait for the tx to be cranked
+                        sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                         match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
                             Ok(confirmed_transaction) => {
                                 info!("\n{:?}", confirmed_transaction);
@@ -319,6 +342,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .consume_events_permissioned_instruction(Vec::new(), arg.limit)
                             .await?;
                         info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        // wait for the tx to be cranked
+                        sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
                         match ob_client_v1.rpc_client.fetch_transaction(&signature).await {
                             Ok(confirmed_transaction) => {
                                 info!("\n{:?}", confirmed_transaction);
@@ -344,7 +369,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         info!("\n[*] Found Program Accounts: {:?}", l);
                     }
                     Some(V1ActionsCommands::Find(_arg)) => {
-                        // Todo: Decode accounts data
                         let result = ob_client_v1
                             .find_open_orders_accounts_for_owner(
                                 ob_client_v1.open_orders.oo_key,
@@ -354,12 +378,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         info!("\n[*] Found Open Orders Accounts: {:?}", result);
                     }
                     None => {
-                        let _ = run_tui().await;
+                        let _ = run_tui(SdkVersion::V1).await;
                     }
                 }
             }
             Some(Commands::V2(cmd)) => {
-                let ob_client_v2 = OBV2Client::new(
+                let mut ob_client_v2 = OBV2Client::new(
                     CommitmentConfig::confirmed(),
                     cmd.market_id.parse().unwrap(),
                     false,
@@ -371,13 +395,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(V2ActionsCommands::Info(_)) => {
                         info!("\n[*] {:?}", ob_client_v2);
                     }
+                    Some(V2ActionsCommands::Place(arg)) => {
+                        let side = match arg.side.as_str() {
+                            "bid" => V2Side::Bid,
+                            "ask" => V2Side::Ask,
+                            _ => V2Side::Bid,
+                        };
+
+                        let (_confirmed, signature, _order_id, _slot) = ob_client_v2
+                            .place_limit_order(
+                                arg.price_target,
+                                arg.target_amount_quote as u64,
+                                side,
+                            )
+                            .await?;
+                        info!("\n[*] Transaction successful, signature: {:?}", signature);
+                        // wait for the tx to be cranked
+                        sleep(Duration::from_millis(CRANK_DELAY_MS)).await;
+                        match ob_client_v2.rpc_client.fetch_transaction(&signature).await {
+                            Ok(confirmed_transaction) => {
+                                info!("\n{:?}", confirmed_transaction);
+                                println_transaction(
+                                    &confirmed_transaction
+                                        .transaction
+                                        .transaction
+                                        .decode()
+                                        .expect("Successful decode"),
+                                    confirmed_transaction.transaction.meta.as_ref(),
+                                    "  ",
+                                    None,
+                                    None,
+                                );
+                            }
+                            Err(err) => {
+                                error!("[*] Unable to get confirmed transaction details: {}", err)
+                            }
+                        }
+                    }
                     None => {
-                        let _ = run_tui().await;
+                        let _ = run_tui(SdkVersion::V2).await;
                     }
                 }
             }
             None => {
-                let _ = run_tui().await;
+                // default is OpenBook V2
+                let _ = run_tui(SdkVersion::V2).await;
             }
         };
     }
