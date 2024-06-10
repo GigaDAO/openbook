@@ -158,6 +158,25 @@ pub enum V1ActionsCommands {
 pub enum V2ActionsCommands {
     /// Fetch Market Info.
     Info(Info),
+    /// Place a limit order.
+    Place(PlaceV2),
+}
+
+/// Represents options for placing a limit order in the OpenBook market.
+#[cfg(feature = "cli")]
+#[derive(Args, Debug, Clone, PartialEq)]
+pub struct PlaceV2 {
+    /// Target amount in quote currency.
+    #[arg(short, long)]
+    pub target_amount_quote: f64,
+
+    /// Side of the order (Bid or Ask).
+    #[arg(short, long)]
+    pub side: String,
+
+    /// Target price for the order.
+    #[arg(short, long)]
+    pub price_target: f64,
 }
 
 /// Represents options for placing a limit order in the OpenBook market.

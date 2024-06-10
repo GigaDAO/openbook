@@ -12,7 +12,7 @@ authors = [
 	"GigaDAO Core Maintainers",
 	"Mahmoud Harmouch <oss@wiseai.dev>",
 ]
-exclude = ["tests"]
+exclude = ["tests", "examples"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -28,7 +28,7 @@ solana-client = "=1.17.34"
 solana-rpc-client-api = "=1.17.34"
 borsh = "0.10.3"
 serde_json = "1.0.114"
-tokio = "1.36.0"
+tokio = { version = "1.36.0", features = ["time"] }
 spl-associated-token-account = "=2.3.0"
 clap = { version = "4.5.1", features = ["derive"], optional = true }
 solana-cli-output = { version = "=1.17.34" , optional = true  }

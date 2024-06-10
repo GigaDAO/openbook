@@ -334,29 +334,33 @@ impl OBClient {
         let mut max_bid = 0;
         let mut open_bids = Vec::new();
         let mut open_bids_prices = Vec::new();
-        let node = bids.remove_max();
-        match node {
-            Some(node) => {
-                let owner = node.owner();
-                let bytes = u64_slice_to_pubkey(owner);
-                let owner_address = Pubkey::from(bytes);
+        loop {
+            let node = bids.remove_max();
+            match node {
+                Some(node) => {
+                    let owner = node.owner();
+                    let bytes = u64_slice_to_pubkey(owner);
+                    let owner_address = Pubkey::from(bytes);
 
-                let order_id = node.order_id();
-                let price_raw = node.price().get();
-                let ui_price = price_raw as f64 / 1e4;
+                    let order_id = node.order_id();
+                    let price_raw = node.price().get();
+                    let ui_price = price_raw as f64 / 1e4;
 
-                debug!("[*] Bid: {price_raw}");
+                    debug!("[*] Bid: {price_raw}");
 
-                if max_bid == 0 {
-                    max_bid = price_raw;
+                    if max_bid == 0 {
+                        max_bid = price_raw;
+                    }
+
+                    if owner_address == self.open_orders.oo_key {
+                        open_bids.push(order_id);
+                        open_bids_prices.push(ui_price);
+                    }
                 }
-
-                if owner_address == self.open_orders.oo_key {
-                    open_bids.push(order_id);
-                    open_bids_prices.push(ui_price);
+                None => {
+                    break;
                 }
             }
-            None => {}
         }
         Ok((open_bids, open_bids_prices, max_bid))
     }
