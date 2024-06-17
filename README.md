@@ -11,7 +11,7 @@
 [![docs](https://docs.rs/openbook/badge.svg)](https://docs.rs/openbook/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[![GigaDAO Discord](https://dcbadge.limes.pink/api/server/gigadao)](https://discord.gg/gigadao)
+[![GigaDAO Discord](https://dcbadge.limes.pink/api/server/gigadao-gigadex-now-live-920188005686337566)](https://discord.gg/gigadao-gigadex-now-live-920188005686337566)
 
 | 🐧 Linux `(Recommended)` | 🪟 Windows |
 | :------: | :--------: |
